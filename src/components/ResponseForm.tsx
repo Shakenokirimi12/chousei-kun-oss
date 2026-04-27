@@ -109,7 +109,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         }
     }, [eventId, participants, allAvailabilities, candidates.length]);
 
-    // Helper to parse candidate string "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
+    // Helper to parse candidate string "YYYY-MM-DD_P#" or legacy "YYYY-MM-DD_H#"
     const parseCandidate = React.useCallback((candidate: string) => {
         const [datePart, slotId] = candidate.split("_");
         const date = new Date(datePart);
@@ -419,7 +419,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
 
                 <div className="pt-4">
                     <Button
-                        className="w-full sm:max-w-md shadow-lg shadow-primary/20"
+                        className="w-full shadow-lg shadow-primary/20"
                         size="lg"
                         onClick={handleSubmit}
                         disabled={!name.trim() || isSubmitting}

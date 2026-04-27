@@ -37,9 +37,9 @@ export const HOURLY_SLOTS = Array.from({ length: 24 }, (_, i) => {
 });
 
 interface PeriodSelectorProps {
-    selectedPeriods: string[]; // Format: "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
+    selectedPeriods: string[]; // Format: "YYYY-MM-DD_P#"
     onChange: (periods: string[]) => void;
-    busyPeriods?: string[]; // Format: "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
+    busyPeriods?: string[]; // Format: "YYYY-MM-DD_P#"
 }
 
 export function PeriodSelector({
@@ -47,9 +47,27 @@ export function PeriodSelector({
     onChange,
     busyPeriods = []
 }: PeriodSelectorProps) {
-    const [viewDates, setViewDates] = React.useState<Date[]>([new Date()]);
+    const deriveDatesFromPeriods = React.useCallback((periods: string[]) => {
+        const datesMap = new Map<string, Date>();
+        periods.forEach((period) => {
+            const [dateStr] = period.split("_");
+            if (!dateStr) return;
+            if (!datesMap.has(dateStr)) {
+                datesMap.set(dateStr, new Date(dateStr));
+            }
+        });
+        return Array.from(datesMap.values()).sort((a, b) => a.getTime() - b.getTime());
+    }, []);
+
+    const [viewDates, setViewDates] = React.useState<Date[]>(() => {
+        const derived = deriveDatesFromPeriods(selectedPeriods);
+        return derived.length > 0 ? derived : [new Date()];
+    });
     // Track which date is currently "active" for quick selection
-    const [focusedDate, setFocusedDate] = React.useState<Date | null>(new Date());
+    const [focusedDate, setFocusedDate] = React.useState<Date | null>(() => {
+        const derived = deriveDatesFromPeriods(selectedPeriods);
+        return derived[0] ?? new Date();
+    });
     // Zoom level state (1.2 = default)
     const [zoomLevel, setZoomLevel] = React.useState(1.2);
 
@@ -79,6 +97,23 @@ export function PeriodSelector({
         }
     };
 
+    // Reflect externally provided existing candidates into selected dates on first load/update.
+    React.useEffect(() => {
+        const derived = deriveDatesFromPeriods(selectedPeriods);
+        if (derived.length === 0) return;
+
+        const sameLength = derived.length === viewDates.length;
+        const sameValues =
+            sameLength && derived.every((d, i) => d.getTime() === viewDates[i]?.getTime());
+        if (sameValues) return;
+
+        setViewDates(derived);
+        setFocusedDate((prev) => {
+            if (prev && derived.some((d) => d.getTime() === prev.getTime())) return prev;
+            return derived[0];
+        });
+    }, [selectedPeriods, deriveDatesFromPeriods, viewDates]);
+
     // Helper to parse time string "HH:MM" to minutes from 0:00
     const parseTimeToMinutes = (timeStr: string) => {
         const [h, m] = timeStr.trim().split(":").map(Number);
@@ -105,17 +140,16 @@ export function PeriodSelector({
                 label: `${p.id}限`,
                 sub: p.time
             };
-        } else {
-            const h = HOURLY_SLOTS.find(x => x.id === id);
-            if (!h) return null;
-            const [start, end] = h.time.split("-");
-            return {
-                startMin: parseTimeToMinutes(start),
-                endMin: parseTimeToMinutes(end),
-                label: `${h.id}:00`,
-                sub: "60分"
-            };
         }
+        const h = HOURLY_SLOTS.find(x => x.id === id);
+        if (!h) return null;
+        const [start, end] = h.time.split("-");
+        return {
+            startMin: parseTimeToMinutes(start),
+            endMin: parseTimeToMinutes(end),
+            label: `${h.id}:00`,
+            sub: h.time
+        };
     };
 
     const getBlockStyle = (startMin: number, endMin: number) => {
@@ -124,8 +158,8 @@ export function PeriodSelector({
         return { top: `${top}px`, height: `${height}px` };
     };
 
-    const togglePeriod = (dateStr: string, id: number, type: "P" | "H") => {
-        const key = `${dateStr}_${type}${id}`;
+    const togglePeriod = (dateStr: string, id: number) => {
+        const key = `${dateStr}_P${id}`;
         if (selectedPeriods.includes(key)) {
             onChange(selectedPeriods.filter((p) => p !== key));
         } else {
@@ -135,11 +169,11 @@ export function PeriodSelector({
     };
 
     // Toggle a period for the FOCUSED date only
-    const toggleFocusedPeriod = (id: number, type: "P" | "H") => {
+    const toggleFocusedPeriod = (id: number) => {
         if (!focusedDate) return;
 
         const dateStr = format(focusedDate, "yyyy-MM-dd");
-        togglePeriod(dateStr, id, type);
+        togglePeriod(dateStr, id);
     };
 
     const copyDaySelections = (sourceDateStr: string) => {
@@ -169,7 +203,6 @@ export function PeriodSelector({
         const dateStr = format(focusedDate, "yyyy-MM-dd");
         const allSlots = [
             ...CUSTOM_PERIODS.map(p => `${dateStr}_P${p.id}`),
-            ...HOURLY_SLOTS.map(h => `${dateStr}_H${h.id}`)
         ];
 
         const otherDaysSelections = selectedPeriods.filter(p => !p.startsWith(dateStr));
@@ -272,33 +305,11 @@ export function PeriodSelector({
                                             selectedPeriods={selectedPeriods}
                                             togglePeriod={(id) => {
                                                 const [_, pId] = id.split("_P");
-                                                toggleFocusedPeriod(Number(pId), "P");
+                                                toggleFocusedPeriod(Number(pId));
                                             }}
                                             busyPeriods={busyPeriods}
                                         />
                                     )}
-                                    <div>
-                                        <h4 className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-tight">時間 (1時間ごと)</h4>
-                                        <div className="grid grid-cols-4 lg:grid-cols-6 gap-1">
-                                            {HOURLY_SLOTS.map(h => {
-                                                const isSelected = selectedPeriods.includes(
-                                                    `${format(focusedDate, "yyyy-MM-dd")}_H${h.id}`
-                                                );
-                                                return (
-                                                    <Button
-                                                        key={h.id}
-                                                        type="button"
-                                                        variant={isSelected ? "default" : "outline"}
-                                                        size="sm"
-                                                        className="h-9 px-0 flex flex-col gap-0"
-                                                        onClick={() => toggleFocusedPeriod(h.id, "H")}
-                                                    >
-                                                        <span className="text-[10px] leading-none">{h.id}:00</span>
-                                                    </Button>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
                                 </>
                             )}
                         </div>
@@ -460,7 +471,7 @@ export function PeriodSelector({
                                                         key={sp}
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            togglePeriod(dateStr, id, type);
+                                                            togglePeriod(dateStr, id);
                                                         }}
                                                         className="absolute inset-x-1 rounded px-2 py-1 text-[10px] sm:text-xs font-medium border cursor-pointer
                                                                    shadow-sm hover:shadow-md transition-all z-20 overflow-hidden
@@ -490,26 +501,9 @@ export function PeriodSelector({
                                                                 style={style}
                                                                 onClick={(e) => {
                                                                     e.stopPropagation(); // Stop bubbling to column click
-                                                                    togglePeriod(dateStr, p.id, "P");
+                                                                    togglePeriod(dateStr, p.id);
                                                                 }}
                                                                 title={`${p.label}を切り替え`}
-                                                            />
-                                                        );
-                                                    })}
-                                                    {HOURLY_SLOTS.map(h => {
-                                                        const info = getSlotInfo("H", h.id);
-                                                        if (!info) return null;
-                                                        const style = getBlockStyle(info.startMin, info.endMin);
-                                                        return (
-                                                            <div
-                                                                key={`target-H${h.id}`}
-                                                                className="absolute inset-x-0 z-0 hover:bg-primary/5 cursor-pointer"
-                                                                style={style}
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    togglePeriod(dateStr, h.id, "H");
-                                                                }}
-                                                                title={`${h.id}:00を切り替え`}
                                                             />
                                                         );
                                                     })}

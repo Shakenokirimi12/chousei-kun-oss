@@ -11,6 +11,7 @@ interface Event {
     title: string;
     description: string;
     candidates: string[];
+    confirmedCandidateIdx?: number | null;
 }
 
 interface Participant {
@@ -33,7 +34,7 @@ interface EventViewProps {
 
 export function EventView({ event, participants, availabilities }: EventViewProps) {
 
-    // Helper to parse candidate string "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
+    // Helper to parse candidate string "YYYY-MM-DD_P#" or legacy "YYYY-MM-DD_H#"
     const parseCandidate = (candidate: string) => {
         const [datePart, slotId] = candidate.split("_");
         const date = new Date(datePart);
@@ -102,10 +103,12 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                             {event.candidates.map((c, idx) => {
                                 const { date, period } = parseCandidate(c);
                                 const highlight = scores[idx] === maxScore && participants.length > 0;
+                                const confirmed = event.confirmedCandidateIdx === idx;
                                 return (
                                     <th key={idx} className={cn(
                                         "h-14 px-2 align-middle font-medium text-muted-foreground border-l relative text-center min-w-[80px]",
-                                        highlight ? "bg-primary/5 font-bold text-primary" : ""
+                                        confirmed ? "bg-emerald-100/70 text-emerald-700 font-bold" : "",
+                                        highlight && !confirmed ? "bg-primary/5 font-bold text-primary" : ""
                                     )}>
                                         <div className="flex flex-col items-center justify-center h-full py-1">
                                             <span className="text-[10px] uppercase text-muted-foreground/70">
@@ -118,7 +121,12 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                                                 {period?.label}
                                             </span>
                                             {/* Highlight Badge */}
-                                            {highlight && (
+                                            {confirmed && (
+                                                <div className="absolute top-1 left-1">
+                                                    <span className="text-[10px] rounded bg-emerald-600 text-white px-1 py-0.5">確定</span>
+                                                </div>
+                                            )}
+                                            {highlight && !confirmed && (
                                                 <div className="absolute top-1 right-1">
                                                     <span className="flex h-2 w-2 rounded-full bg-primary" />
                                                 </div>
@@ -152,10 +160,12 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                                     {event.candidates.map((_, idx) => {
                                         const avail = availabilities.find(a => a.participant_id === p.id && a.candidate_idx === idx);
                                         const highlight = scores[idx] === maxScore;
+                                        const confirmed = event.confirmedCandidateIdx === idx;
                                         return (
                                             <td key={idx} className={cn(
                                                 "p-4 align-middle text-center border-l",
-                                                highlight ? "bg-primary/5" : ""
+                                                confirmed ? "bg-emerald-100/60" : "",
+                                                highlight && !confirmed ? "bg-primary/5" : ""
                                             )}>
                                                 {avail ? statusIcon(avail.status) : "-"}
                                             </td>
@@ -172,10 +182,13 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                             </td>
                             {scores.map((score, idx) => {
                                 const highlight = score === maxScore && participants.length > 0;
+                                const confirmed = event.confirmedCandidateIdx === idx;
                                 return (
                                     <td key={idx} className={cn(
                                         "p-2 text-center border-l text-base",
-                                        highlight ? "text-primary font-bold bg-primary/10" : "text-muted-foreground"
+                                        confirmed ? "text-emerald-700 font-bold bg-emerald-100/70" : "",
+                                        highlight && !confirmed ? "text-primary font-bold bg-primary/10" : "",
+                                        !highlight && !confirmed ? "text-muted-foreground" : ""
                                     )}>
                                         {score.toFixed(1)}
                                     </td>

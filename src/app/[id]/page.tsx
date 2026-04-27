@@ -19,7 +19,12 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
     const { id } = await params;
     const { env } = await getCloudflareContext();
 
-    const event = await env.DB.prepare("SELECT * FROM events WHERE id = ?").bind(id).first();
+    const event = await env.DB.prepare("SELECT id, title, description, candidates FROM events WHERE id = ?").bind(id).first<{
+        id: string;
+        title: string;
+        description: string | null;
+        candidates: string;
+    }>();
 
     if (!event) {
         notFound();
@@ -27,9 +32,9 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
 
     // Parse candidates
     const parsedEvent = {
-        ...event,
-        title: event.title as string,
-        description: event.description as string,
+        id: event.id,
+        title: event.title,
+        description: event.description ?? "",
         candidates: JSON.parse(event.candidates as string) as string[]
     };
 
@@ -49,13 +54,13 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
 
     return (
         <div className="min-h-screen bg-background text-foreground p-2 sm:p-4 md:p-6 lg:p-8">
-            <div className="max-w-7xl mx-auto w-full space-y-8">
+            <div className="w-full space-y-8">
                 <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
                     <div>
                         <h1 className="text-4xl font-extrabold tracking-tight">{parsedEvent.title}</h1>
                         <p className="text-muted-foreground mt-2 text-lg">{parsedEvent.description}</p>
                     </div>
-                    <Link href={`/${id}/admin`}>
+                    <Link href={`/${id}/results`}>
                         <Button variant="outline" className="gap-2 group">
                             結果を確認する
                             <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />

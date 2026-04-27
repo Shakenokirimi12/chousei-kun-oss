@@ -1,3 +1,3 @@
 import { handleApiRequest } from "@/server/api/handler";
 
-export const POST = handleApiRequest;
+export const PATCH = handleApiRequest;

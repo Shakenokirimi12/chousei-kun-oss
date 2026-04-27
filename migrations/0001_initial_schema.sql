@@ -24,5 +24,5 @@ CREATE TABLE IF NOT EXISTS availabilities (
     FOREIGN KEY (participant_id) REFERENCES participants(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_participants_event_id ON participants(event_id);
-CREATE INDEX idx_availabilities_participant_id ON availabilities(participant_id);
+CREATE INDEX IF NOT EXISTS idx_participants_event_id ON participants(event_id);
+CREATE INDEX IF NOT EXISTS idx_availabilities_participant_id ON availabilities(participant_id);

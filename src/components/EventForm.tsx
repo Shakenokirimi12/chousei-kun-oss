@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
-import { PeriodSelector, CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/PeriodSelector";
+import { PeriodSelector, CUSTOM_PERIODS } from "@/components/PeriodSelector";
 import { Loader2, Calendar as CalendarIcon, Check, Copy, ExternalLink, ArrowRight, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
@@ -28,6 +28,7 @@ export function EventForm() {
     const [isModalOpen, setIsModalOpen] = React.useState(false);
     const [title, setTitle] = React.useState("");
     const [description, setDescription] = React.useState("");
+    const [adminPassword, setAdminPassword] = React.useState("");
     const [selectedPeriods, setSelectedPeriods] = React.useState<string[]>([]);
     const [showRestoreDialog, setShowRestoreDialog] = React.useState(false);
     const DRAFT_KEY = "chouseikun_draft_periods";
@@ -93,17 +94,6 @@ export function EventForm() {
                 }
             });
 
-            HOURLY_SLOTS.forEach(h => {
-                const [startH] = h.time.split("-")[0].split(":").map(Number);
-                const pStart = new Date(startDate);
-                pStart.setHours(startH, 0, 0, 0);
-                const pEnd = new Date(startDate);
-                pEnd.setHours(startH + 1, 0, 0, 0);
-
-                if (checkOverlap(startDate, endDate, pStart, pEnd)) {
-                    newBusyPeriods.push(`${dateStr}_H${h.id}`);
-                }
-            });
         });
         return [...new Set(newBusyPeriods)];
     }, []);
@@ -204,9 +194,6 @@ export function EventForm() {
                         const id = parseInt(slot.substring(1));
                         const p = CUSTOM_PERIODS.find((x: any) => x.id === id);
                         return p ? p.time.split("-")[0] : "00:00";
-                    } else if (slot.startsWith("H")) {
-                        const id = parseInt(slot.substring(1));
-                        return `${id.toString().padStart(2, '0')}:00`;
                     } else {
                         const id = parseInt(slot);
                         const p = CUSTOM_PERIODS.find((x: any) => x.id === id);
@@ -219,7 +206,7 @@ export function EventForm() {
             const response = await fetch("/api/events", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ title, description, candidates: sortedCandidates }),
+                body: JSON.stringify({ title, description, candidates: sortedCandidates, adminPassword }),
             });
 
             if (!response.ok) throw new Error("イベントの作成に失敗しました");
@@ -248,6 +235,7 @@ export function EventForm() {
     if (createdEventId) {
         const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
         const participantUrl = `${baseUrl}/${createdEventId}`;
+        const resultsUrl = `${baseUrl}/${createdEventId}/results`;
         const adminUrl = `${baseUrl}/${createdEventId}/admin`;
 
         const copyToClipboard = (text: string, label: string) => {
@@ -260,7 +248,7 @@ export function EventForm() {
         };
 
         return (
-            <div className="w-full max-w-2xl mx-auto animate-in fade-in zoom-in-95 duration-500">
+            <div className="w-full animate-in fade-in zoom-in-95 duration-500">
                 <Card className="border-2 border-primary/20 bg-card/50 backdrop-blur-md shadow-2xl overflow-hidden">
                     <CardHeader className="text-center pb-2">
                         <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
@@ -288,6 +276,20 @@ export function EventForm() {
                             <div className="p-4 rounded-xl border bg-background/50 space-y-3">
                                 <h4 className="font-bold flex items-center gap-2 text-orange-500">
                                     <span className="flex items-center justify-center w-6 h-6 rounded-full bg-orange-500 text-white text-xs">2</span>
+                                    結果確認 URL (参加者向け)
+                                </h4>
+                                <div className="flex gap-2">
+                                    <Input value={resultsUrl} readOnly className="bg-muted/50" />
+                                    <Button size="icon" variant="outline" onClick={() => copyToClipboard(resultsUrl, "結果確認URL")}>
+                                        <Copy className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                                <p className="text-[10px] text-muted-foreground">回答状況を公開して確認するためのURLです。</p>
+                            </div>
+
+                            <div className="p-4 rounded-xl border bg-background/50 space-y-3">
+                                <h4 className="font-bold flex items-center gap-2 text-orange-500">
+                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-orange-500 text-white text-xs">3</span>
                                     管理用 URL (あなた専用)
                                 </h4>
                                 <div className="flex gap-2">
@@ -308,7 +310,7 @@ export function EventForm() {
                         </Link>
                         <Link href={`/${createdEventId}/admin`} className="w-full">
                             <Button variant="ghost" className="w-full gap-2">
-                                管理画面で回答状況を見る <ExternalLink className="h-4 w-4" />
+                                管理画面で設定を行う <ExternalLink className="h-4 w-4" />
                             </Button>
                         </Link>
                     </CardFooter>
@@ -404,6 +406,23 @@ export function EventForm() {
                                     className="bg-background/50 backdrop-blur-sm"
                                 />
                             </div>
+
+                            <div className="space-y-2">
+                                <label htmlFor="adminPassword" className="text-sm font-medium leading-none">
+                                    管理者パスワード <span className="text-red-500">*</span>
+                                </label>
+                                <Input
+                                    id="adminPassword"
+                                    type="password"
+                                    placeholder="6文字以上"
+                                    value={adminPassword}
+                                    onChange={(e) => setAdminPassword(e.target.value)}
+                                    required
+                                    minLength={6}
+                                    className="bg-background/50 backdrop-blur-sm"
+                                />
+                                <p className="text-xs text-muted-foreground">管理画面の閲覧に必要です。忘れないようにしてください。</p>
+                            </div>
                         </div>
                         <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2">
                             <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)} className="w-full sm:w-auto">
@@ -411,7 +430,7 @@ export function EventForm() {
                             </Button>
                             <Button
                                 type="submit"
-                                disabled={!title || isSubmitting}
+                                disabled={!title || adminPassword.length < 6 || isSubmitting}
                                 className="w-full sm:w-auto shadow-lg shadow-primary/20"
                             >
                                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

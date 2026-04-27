@@ -15,6 +15,10 @@ interface AvailabilityTimelineProps {
     onDayStatusChange?: (dateStr: string, status: number) => void;
     busyPeriods?: string[]; // Format: "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
     okCounts?: number[];
+    mode?: "response" | "admin" | "results";
+    confirmedCandidateIdx?: number | null;
+    candidateStats?: { ok: number; maybe: number; ng: number }[];
+    onConfirmCandidate?: (idx: number) => void;
 }
 
 const parseTimeToMinutes = (timeStr: string) => {
@@ -62,11 +66,36 @@ export function AvailabilityTimeline({
     onStatusChange,
     onDayStatusChange,
     busyPeriods = [],
-    okCounts = []
+    okCounts = [],
+    mode = "response",
+    confirmedCandidateIdx = null,
+    candidateStats = [],
+    onConfirmCandidate
 }: AvailabilityTimelineProps) {
     const [focusedDate, setFocusedDate] = React.useState<Date | null>(null);
     const viewportRef = React.useRef<HTMLDivElement>(null);
     const [zoomLevel, setZoomLevel] = React.useState(1.2);
+
+    React.useEffect(() => {
+        const viewport = viewportRef.current;
+        if (!viewport) return;
+
+        const onWheel = (event: WheelEvent) => {
+            const { scrollTop, scrollHeight, clientHeight } = viewport;
+            const atTop = scrollTop <= 0;
+            const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
+
+            // Prevent scroll chaining to the page when timeline hits top/bottom.
+            if ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)) {
+                event.preventDefault();
+            }
+        };
+
+        viewport.addEventListener("wheel", onWheel, { passive: false });
+        return () => {
+            viewport.removeEventListener("wheel", onWheel);
+        };
+    }, []);
 
     const earliestStartMin = React.useMemo(() => {
         if (candidates.length === 0) return 0;
@@ -140,8 +169,26 @@ export function AvailabilityTimeline({
         <div className="flex flex-col rounded-md border bg-background shadow-sm overflow-hidden h-[600px]">
             <div className="border-b bg-muted/20 p-2 text-xs text-muted-foreground flex flex-col sm:flex-row justify-between items-center gap-2">
                 <div className="text-center sm:text-left">
-                    <span className="md:hidden">候補日程のブロックをタップすると「○ → △ → ×」が切り替わります</span>
-                    <span className="hidden md:inline">候補日程内の記号（○ △ ×）をクリックして出欠を選択してください</span>
+                    {mode === "admin" || mode === "results" ? (
+                        <>
+                            {mode === "admin" ? (
+                                <>
+                                    <span className="md:hidden">候補ブロックを確認して「確定」ボタンを押してください</span>
+                                    <span className="hidden md:inline">回答集計を見ながら、候補ブロック内の「この候補で確定」ボタンで最終日程を選択できます</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span className="md:hidden">候補ブロックごとの回答集計を確認できます</span>
+                                    <span className="hidden md:inline">候補ブロックごとの回答集計（○/△/×）と確定済み候補を確認できます</span>
+                                </>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <span className="md:hidden">候補日程のブロックをタップすると「○ → △ → ×」が切り替わります</span>
+                            <span className="hidden md:inline">候補日程内の記号（○ △ ×）をクリックして出欠を選択してください</span>
+                        </>
+                    )}
                 </div>
                 {/* Zoom Controls */}
                 <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 shadow-sm shrink-0">
@@ -169,7 +216,7 @@ export function AvailabilityTimeline({
                 </div>
             </div>
 
-            <ScrollArea ref={viewportRef} className="flex-1 w-full h-full relative">
+            <ScrollArea ref={viewportRef} className="flex-1 w-full h-full relative overscroll-contain">
                 <div className="flex flex-col min-w-full inline-block pb-20">
                     {/* Header Row */}
                     <div className="sticky top-0 z-40 flex border-b bg-background w-full min-w-max">
@@ -276,6 +323,7 @@ export function AvailabilityTimeline({
                                                     key={idx}
                                                     className={cn(
                                                         "absolute inset-x-0.5 rounded border shadow-sm transition-all z-20 flex flex-col overflow-hidden group/block",
+                                                        mode === "admin" && confirmedCandidateIdx === idx ? "ring-2 ring-emerald-500 bg-emerald-500/10 border-emerald-500/70" : "",
                                                         status === 2 ? "bg-green-500/10 border-green-500/50" :
                                                             status === 1 ? "bg-yellow-500/10 border-yellow-500/50" :
                                                                 "bg-red-500/10 border-red-500/50"
@@ -283,10 +331,12 @@ export function AvailabilityTimeline({
                                                     style={style}
                                                 >
                                                     {/* Mobile Only: Tap to Cycle */}
-                                                    <div
-                                                        className="md:hidden absolute inset-0 z-30 cursor-pointer"
-                                                        onClick={() => onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2)}
-                                                    />
+                                                    {mode === "response" ? (
+                                                        <div
+                                                            className="md:hidden absolute inset-0 z-30 cursor-pointer"
+                                                            onClick={() => onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2)}
+                                                        />
+                                                    ) : null}
 
                                                     <div className="flex flex-col h-full p-1 relative z-10">
                                                         <div className="flex justify-between items-start mb-0.5">
@@ -306,39 +356,82 @@ export function AvailabilityTimeline({
                                                             </div>
                                                         </div>
 
-                                                        {/* PC Only: Direct Selection Buttons */}
-                                                        <div className="hidden md:flex flex-1 items-center justify-around gap-0.5">
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); onStatusChange(idx, 2); }}
-                                                                className={cn(
-                                                                    "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
-                                                                    status === 2 ? "bg-green-500 text-white shadow-inner" : "hover:bg-green-500/20 text-green-600 dark:text-green-400"
+                                                        {mode === "admin" || mode === "results" ? (
+                                                            <div className="flex-1 flex flex-col justify-end gap-1">
+                                                                <div className="grid grid-cols-3 gap-1 text-[9px]">
+                                                                    <div className="rounded bg-green-500/20 text-green-700 text-center py-0.5">
+                                                                        ○ {candidateStats[idx]?.ok ?? 0}
+                                                                    </div>
+                                                                    <div className="rounded bg-yellow-500/20 text-yellow-700 text-center py-0.5">
+                                                                        △ {candidateStats[idx]?.maybe ?? 0}
+                                                                    </div>
+                                                                    <div className="rounded bg-red-500/20 text-red-700 text-center py-0.5">
+                                                                        × {candidateStats[idx]?.ng ?? 0}
+                                                                    </div>
+                                                                </div>
+                                                                {onConfirmCandidate ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        className={cn(
+                                                                            "w-full rounded text-[10px] py-1 font-semibold transition-colors",
+                                                                            confirmedCandidateIdx === idx
+                                                                                ? "bg-emerald-600 text-white"
+                                                                                : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                                                                        )}
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            onConfirmCandidate?.(idx);
+                                                                        }}
+                                                                    >
+                                                                        {confirmedCandidateIdx === idx ? "確定済み" : "この候補で確定"}
+                                                                    </button>
+                                                                ) : (
+                                                                    <div
+                                                                        className={cn(
+                                                                            "w-full rounded text-[10px] py-1 font-semibold text-center",
+                                                                            confirmedCandidateIdx === idx
+                                                                                ? "bg-emerald-600 text-white"
+                                                                                : "bg-muted text-muted-foreground"
+                                                                        )}
+                                                                    >
+                                                                        {confirmedCandidateIdx === idx ? "確定済み候補" : "未確定"}
+                                                                    </div>
                                                                 )}
-                                                                title="参加可能"
-                                                            >
-                                                                <Circle className="w-3 h-3" />
-                                                            </button>
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); onStatusChange(idx, 1); }}
-                                                                className={cn(
-                                                                    "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
-                                                                    status === 1 ? "bg-yellow-500 text-white shadow-inner" : "hover:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
-                                                                )}
-                                                                title="調整中"
-                                                            >
-                                                                <Triangle className="w-3 h-3" />
-                                                            </button>
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); onStatusChange(idx, 0); }}
-                                                                className={cn(
-                                                                    "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
-                                                                    status === 0 ? "bg-red-500 text-white shadow-inner" : "hover:bg-red-500/20 text-red-600 dark:text-red-400"
-                                                                )}
-                                                                title="不参加"
-                                                            >
-                                                                <X className="w-3 h-3" />
-                                                            </button>
-                                                        </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div className="hidden md:flex flex-1 items-center justify-around gap-0.5">
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); onStatusChange(idx, 2); }}
+                                                                    className={cn(
+                                                                        "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
+                                                                        status === 2 ? "bg-green-500 text-white shadow-inner" : "hover:bg-green-500/20 text-green-600 dark:text-green-400"
+                                                                    )}
+                                                                    title="参加可能"
+                                                                >
+                                                                    <Circle className="w-3 h-3" />
+                                                                </button>
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); onStatusChange(idx, 1); }}
+                                                                    className={cn(
+                                                                        "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
+                                                                        status === 1 ? "bg-yellow-500 text-white shadow-inner" : "hover:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
+                                                                    )}
+                                                                    title="調整中"
+                                                                >
+                                                                    <Triangle className="w-3 h-3" />
+                                                                </button>
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); onStatusChange(idx, 0); }}
+                                                                    className={cn(
+                                                                        "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
+                                                                        status === 0 ? "bg-red-500 text-white shadow-inner" : "hover:bg-red-500/20 text-red-600 dark:text-red-400"
+                                                                    )}
+                                                                    title="不参加"
+                                                                >
+                                                                    <X className="w-3 h-3" />
+                                                                </button>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             );
