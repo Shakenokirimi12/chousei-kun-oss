@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
-import { PeriodSelector, CUSTOM_PERIODS } from "@/components/PeriodSelector";
+import { PeriodSelector, CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/PeriodSelector";
 import { Loader2, Calendar as CalendarIcon, Check, Copy, ExternalLink, ArrowRight, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
@@ -91,6 +91,18 @@ export function EventForm() {
 
                 if (checkOverlap(startDate, endDate, pStart, pEnd)) {
                     newBusyPeriods.push(`${dateStr}_P${p.id}`);
+                }
+            });
+
+            HOURLY_SLOTS.forEach(h => {
+                const [startH] = h.time.split("-")[0].split(":").map(Number);
+                const pStart = new Date(startDate);
+                pStart.setHours(startH, 0, 0, 0);
+                const pEnd = new Date(startDate);
+                pEnd.setHours(startH + 1, 0, 0, 0);
+
+                if (checkOverlap(startDate, endDate, pStart, pEnd)) {
+                    newBusyPeriods.push(`${dateStr}_H${h.id}`);
                 }
             });
 
@@ -194,6 +206,9 @@ export function EventForm() {
                         const id = parseInt(slot.substring(1));
                         const p = CUSTOM_PERIODS.find((x: any) => x.id === id);
                         return p ? p.time.split("-")[0] : "00:00";
+                    } else if (slot.startsWith("H")) {
+                        const id = parseInt(slot.substring(1));
+                        return `${id.toString().padStart(2, '0')}:00`;
                     } else {
                         const id = parseInt(slot);
                         const p = CUSTOM_PERIODS.find((x: any) => x.id === id);

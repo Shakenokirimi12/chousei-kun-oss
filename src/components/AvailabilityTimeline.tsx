@@ -75,6 +75,14 @@ export function AvailabilityTimeline({
     const [focusedDate, setFocusedDate] = React.useState<Date | null>(null);
     const viewportRef = React.useRef<HTMLDivElement>(null);
     const [zoomLevel, setZoomLevel] = React.useState(1.2);
+    const candidateScores = React.useMemo(
+        () => candidateStats.map((s) => s.ok * 2 + s.maybe),
+        [candidateStats]
+    );
+    const maxScore = React.useMemo(
+        () => (candidateScores.length > 0 ? Math.max(...candidateScores) : 0),
+        [candidateScores]
+    );
 
     React.useEffect(() => {
         const viewport = viewportRef.current;
@@ -323,10 +331,20 @@ export function AvailabilityTimeline({
                                                     key={idx}
                                                     className={cn(
                                                         "absolute inset-x-0.5 rounded border shadow-sm transition-all z-20 flex flex-col overflow-hidden group/block",
-                                                        mode === "admin" && confirmedCandidateIdx === idx ? "ring-2 ring-emerald-500 bg-emerald-500/10 border-emerald-500/70" : "",
-                                                        status === 2 ? "bg-green-500/10 border-green-500/50" :
-                                                            status === 1 ? "bg-yellow-500/10 border-yellow-500/50" :
-                                                                "bg-red-500/10 border-red-500/50"
+                                                        mode === "admin" || mode === "results"
+                                                            ? "bg-card border-border/80"
+                                                            : status === 2
+                                                                ? "bg-green-500/10 border-green-500/50"
+                                                                : status === 1
+                                                                    ? "bg-yellow-500/10 border-yellow-500/50"
+                                                                    : "bg-red-500/10 border-red-500/50",
+                                                        confirmedCandidateIdx === idx ? "ring-2 ring-emerald-600 border-emerald-500" : "",
+                                                        (mode === "admin" || mode === "results") &&
+                                                            confirmedCandidateIdx !== idx &&
+                                                            candidateScores[idx] === maxScore &&
+                                                            maxScore > 0
+                                                            ? "ring-2 ring-sky-500 border-sky-500"
+                                                            : ""
                                                     )}
                                                     style={style}
                                                 >
@@ -343,6 +361,20 @@ export function AvailabilityTimeline({
                                                             <div className="flex flex-col leading-tight">
                                                                 <div className="flex items-center gap-1">
                                                                     <span className="text-[10px] font-bold opacity-70">{info.label}</span>
+                                                                    {(mode === "admin" || mode === "results") &&
+                                                                        confirmedCandidateIdx !== idx &&
+                                                                        candidateScores[idx] === maxScore &&
+                                                                        maxScore > 0 ? (
+                                                                        <span className="text-[9px] bg-sky-100 text-sky-700 px-1 rounded-sm font-bold">
+                                                                            推奨
+                                                                        </span>
+                                                                    ) : null}
+                                                                    {(mode === "admin" || mode === "results") &&
+                                                                        confirmedCandidateIdx === idx ? (
+                                                                        <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1 rounded-sm font-bold">
+                                                                            確定
+                                                                        </span>
+                                                                    ) : null}
                                                                     {(okCounts[idx] || 0) > 0 && (
                                                                         <span className="text-[9px] bg-primary/20 text-primary px-1 rounded-sm font-bold">
                                                                             {(okCounts[idx] || 0)}人
@@ -373,10 +405,10 @@ export function AvailabilityTimeline({
                                                                     <button
                                                                         type="button"
                                                                         className={cn(
-                                                                            "w-full rounded text-[10px] py-1 font-semibold transition-colors",
+                                                                            "rounded text-[10px] py-1 px-2 font-semibold transition-colors self-end mt-auto",
                                                                             confirmedCandidateIdx === idx
-                                                                                ? "bg-emerald-600 text-white"
-                                                                                : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                                                                                ? "bg-emerald-700 text-white"
+                                                                                : "bg-foreground text-background hover:opacity-90"
                                                                         )}
                                                                         onClick={(e) => {
                                                                             e.stopPropagation();
@@ -388,7 +420,7 @@ export function AvailabilityTimeline({
                                                                 ) : (
                                                                     <div
                                                                         className={cn(
-                                                                            "w-full rounded text-[10px] py-1 font-semibold text-center",
+                                                                            "rounded text-[10px] py-1 px-2 font-semibold text-center self-end mt-auto",
                                                                             confirmedCandidateIdx === idx
                                                                                 ? "bg-emerald-600 text-white"
                                                                                 : "bg-muted text-muted-foreground"

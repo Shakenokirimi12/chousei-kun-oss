@@ -16,6 +16,8 @@ export const participants = sqliteTable("participants", {
     eventId: text("event_id").notNull(),
     name: text("name").notNull(),
     comment: text("comment"),
+    notifyOnFinalize: integer("notify_on_finalize").notNull().default(0),
+    notificationEmail: text("notification_email"),
 });
 
 export const availabilities = sqliteTable("availabilities", {
@@ -23,4 +25,14 @@ export const availabilities = sqliteTable("availabilities", {
     participantId: text("participant_id").notNull(),
     candidateIdx: integer("candidate_idx").notNull(),
     status: integer("status").notNull(),
+});
+
+export const googleOauthSessions = sqliteTable("google_oauth_sessions", {
+    sessionId: text("session_id").primaryKey(),
+    email: text("email").notNull(),
+    accessToken: text("access_token").notNull(),
+    refreshToken: text("refresh_token"),
+    expiresAt: integer("expires_at").notNull(),
+    createdAt: integer("created_at").notNull(),
+    updatedAt: integer("updated_at").notNull(),
 });

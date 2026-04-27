@@ -52,7 +52,7 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
 
     return (
         <div className="min-h-screen bg-background text-foreground p-2 sm:p-4 md:p-6 lg:p-8">
-            <div className="max-w-7xl mx-auto space-y-6">
+            <div className="w-full space-y-6">
                 <div className="flex items-center gap-4">
                     <Link href={`/${id}`}>
                         <Button variant="ghost" size="icon">
@@ -65,13 +65,11 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
                     </div>
                 </div>
 
-                <div className="bg-card rounded-lg border shadow-sm p-4 overflow-hidden">
-                    <EventResultsCalendar
-                        candidates={parsedEvent.candidates}
-                        confirmedCandidateIdx={parsedEvent.confirmedCandidateIdx}
-                        availabilities={availabilities as any}
-                    />
-                </div>
+                <EventResultsCalendar
+                    candidates={parsedEvent.candidates}
+                    confirmedCandidateIdx={parsedEvent.confirmedCandidateIdx}
+                    availabilities={availabilities as any}
+                />
             </div>
         </div>
     );

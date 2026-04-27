@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { siteConfig } from "@/config/site";
 import { AdminEventSettings } from "@/components/AdminEventSettings";
+import { AdminSessionActions } from "@/components/AdminSessionActions";
 
 export default async function AdminPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -59,6 +60,7 @@ export default async function AdminPage({ params }: { params: Promise<{ id: stri
             <h1 className="text-2xl font-bold">{siteConfig.ui.admin.title}</h1>
             <p className="text-muted-foreground text-sm">{(parsedEvent as any).title} の管理設定</p>
           </div>
+          <AdminSessionActions eventId={id} />
         </div>
 
         <AdminEventSettings eventId={id} initialTitle={parsedEvent.title} initialDescription={parsedEvent.description ?? ""} initialCandidates={parsedEvent.candidates} initialConfirmedCandidateIdx={parsedEvent.confirmedCandidateIdx ?? null} participants={participants as any} availabilities={availabilities as any} />
