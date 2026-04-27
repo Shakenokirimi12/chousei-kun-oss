@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
 import { PeriodSelector, CUSTOM_PERIODS } from "@/components/PeriodSelector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Check } from "lucide-react";
 
 type Props = {
     eventId: string;
@@ -35,10 +36,11 @@ export function AdminEventSettings({
     const [confirmedCandidateIdx, setConfirmedCandidateIdx] = useState<number | null>(initialConfirmedCandidateIdx);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isConfirming, setIsConfirming] = useState(false);
-    const [message, setMessage] = useState<string>("");
+    const [submitComplete, setSubmitComplete] = useState(false);
     const [error, setError] = useState<string>("");
     const [needsGoogleReauth, setNeedsGoogleReauth] = useState(false);
     const [googleSessionEmail, setGoogleSessionEmail] = useState<string>("");
+    const completeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -107,10 +109,44 @@ export function AdminEventSettings({
 
     const okCounts = useMemo(() => candidateStats.map((x) => x.ok), [candidateStats]);
 
+    const participantNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        participants.forEach((p) => {
+            if (p.id && p.name) {
+                map.set(p.id, p.name);
+            }
+        });
+        return map;
+    }, [participants]);
+
+    const candidateParticipants = useMemo(() => {
+        const participantsByCandidate = sortedCandidates.map(() => ({ ok: [] as string[], maybe: [] as string[], ng: [] as string[] }));
+        const oldCandidateToNewIndex = new Map<string, number>();
+        sortedCandidates.forEach((candidate, idx) => oldCandidateToNewIndex.set(candidate, idx));
+
+        availabilities.forEach((availability) => {
+            const oldCandidate = initialCandidates[availability.candidate_idx];
+            if (!oldCandidate) return;
+            const newIdx = oldCandidateToNewIndex.get(oldCandidate);
+            if (newIdx === undefined) return;
+
+            const name = participantNameById.get(availability.participant_id);
+            if (!name) return;
+
+            if (availability.status === 2) participantsByCandidate[newIdx].ok.push(name);
+            else if (availability.status === 1) participantsByCandidate[newIdx].maybe.push(name);
+            else participantsByCandidate[newIdx].ng.push(name);
+        });
+        return participantsByCandidate;
+    }, [availabilities, initialCandidates, sortedCandidates, participantNameById]);
+
     const onSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        setMessage("");
         setError("");
+        setSubmitComplete(false);
+        if (completeTimerRef.current) {
+            clearTimeout(completeTimerRef.current);
+        }
         if (!title.trim()) {
             setError("タイトルを入力してください。");
             return;
@@ -134,7 +170,10 @@ export function AdminEventSettings({
                 const data = await res.json() as { error?: string };
                 throw new Error(data.error || "更新に失敗しました。");
             }
-            setMessage("管理設定を更新しました。");
+            setSubmitComplete(true);
+            completeTimerRef.current = setTimeout(() => {
+                setSubmitComplete(false);
+            }, 2000);
             router.refresh();
         } catch (err) {
             setError(err instanceof Error ? err.message : "更新に失敗しました。");
@@ -145,7 +184,6 @@ export function AdminEventSettings({
 
     const confirmCandidate = async (idx: number | null) => {
         setError("");
-        setMessage("");
         setIsConfirming(true);
         try {
             const res = await fetch(`/api/events/${eventId}/admin/confirm`, {
@@ -158,7 +196,6 @@ export function AdminEventSettings({
                 throw new Error(data.error || "確定に失敗しました。");
             }
             setConfirmedCandidateIdx(idx);
-            setMessage(idx === null ? "確定を解除しました。" : "この候補を確定しました。");
             router.refresh();
         } catch (err) {
             setError(err instanceof Error ? err.message : "確定に失敗しました。");
@@ -233,6 +270,7 @@ export function AdminEventSettings({
                         mode="admin"
                         confirmedCandidateIdx={confirmedCandidateIdx}
                         candidateStats={candidateStats}
+                        candidateParticipants={candidateParticipants}
                         onConfirmCandidate={confirmCandidate}
                     />
                     <p className="text-xs text-muted-foreground">
@@ -241,13 +279,25 @@ export function AdminEventSettings({
                 </TabsContent>
             </Tabs>
 
-            {message ? <p className="text-sm text-emerald-600">{message}</p> : null}
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
             {activeTab === "edit" ? (
                 <div className="flex justify-end pt-2">
-                    <Button type="submit" disabled={isSubmitting || isConfirming} className="min-w-44">
-                        {isSubmitting ? "保存中..." : "予定編集を保存"}
+                    <Button
+                        type="submit"
+                        disabled={isSubmitting || isConfirming}
+                        className={`min-w-44 transition-colors ${submitComplete ? "bg-emerald-600 hover:bg-emerald-600" : ""}`}
+                    >
+                        {isSubmitting ? (
+                            "保存中..."
+                        ) : submitComplete ? (
+                            <span className="flex items-center gap-2">
+                                <Check className="h-4 w-4" />
+                                保存完了
+                            </span>
+                        ) : (
+                            "予定編集を保存"
+                        )}
                     </Button>
                 </div>
             ) : null}

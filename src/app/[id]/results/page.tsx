@@ -2,19 +2,8 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
-import dynamic from "next/dynamic";
-
-const EventResultsCalendar = dynamic(
-    () => import("@/components/EventResultsCalendar").then((mod) => mod.EventResultsCalendar),
-    {
-    loading: () => (
-        <div className="flex flex-col items-center justify-center p-20 gap-4">
-            <Loader2 className="h-8 w-8 text-primary animate-spin" />
-            <p className="text-muted-foreground font-medium text-sm">結果を読み込み中...</p>
-        </div>
-    ),
-});
+import { ArrowLeft } from "lucide-react";
+import { EventResultsCalendar } from "@/components/EventResultsCalendar";
 
 export default async function ResultsPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
@@ -40,16 +29,6 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
         confirmedCandidateIdx: event.confirmed_candidate_idx,
     };
 
-    const { results: participants } = await env.DB.prepare(
-        "SELECT * FROM participants WHERE event_id = ?"
-    ).bind(id).all();
-
-    const { results: availabilities } = await env.DB.prepare(
-        `SELECT a.* FROM availabilities a
-         JOIN participants p ON a.participant_id = p.id
-         WHERE p.event_id = ?`
-    ).bind(id).all();
-
     return (
         <div className="min-h-screen bg-background text-foreground p-2 sm:p-4 md:p-6 lg:p-8">
             <div className="w-full space-y-6">
@@ -66,9 +45,9 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
                 </div>
 
                 <EventResultsCalendar
+                    eventId={id}
                     candidates={parsedEvent.candidates}
                     confirmedCandidateIdx={parsedEvent.confirmedCandidateIdx}
-                    availabilities={availabilities as any}
                 />
             </div>
         </div>

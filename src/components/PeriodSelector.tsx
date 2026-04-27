@@ -181,16 +181,20 @@ export function PeriodSelector({
         onChange(newSelected);
     };
 
-    const selectDayAll = () => {
+    const selectDayPeriods = () => {
         if (!focusedDate) return;
         const dateStr = format(focusedDate, "yyyy-MM-dd");
-        const allSlots = [
-            ...CUSTOM_PERIODS.map(p => `${dateStr}_P${p.id}`),
-            ...HOURLY_SLOTS.map(h => `${dateStr}_H${h.id}`)
-        ];
+        const periodSlots = CUSTOM_PERIODS.map(p => `${dateStr}_P${p.id}`);
+        const otherSelections = selectedPeriods.filter(p => !p.startsWith(dateStr) || !p.includes("_P"));
+        onChange([...otherSelections, ...periodSlots]);
+    };
 
-        const otherDaysSelections = selectedPeriods.filter(p => !p.startsWith(dateStr));
-        onChange([...otherDaysSelections, ...allSlots]);
+    const selectDayHourly = () => {
+        if (!focusedDate) return;
+        const dateStr = format(focusedDate, "yyyy-MM-dd");
+        const hourlySlots = HOURLY_SLOTS.map(h => `${dateStr}_H${h.id}`);
+        const otherSelections = selectedPeriods.filter(p => !p.startsWith(dateStr) || !p.includes("_H"));
+        onChange([...otherSelections, ...hourlySlots]);
     };
 
     const clearDayAll = () => {
@@ -252,39 +256,50 @@ export function PeriodSelector({
                     <h3 className="font-semibold text-sm mb-3 px-2 flex justify-between items-center">
                         <span>クイック選択</span>
                         {focusedDate && (
-                            <div className="flex items-center gap-1">
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 px-2 text-[10px] text-primary"
-                                    onClick={selectDayAll}
-                                >
-                                    全選択
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 px-2 text-[10px] text-muted-foreground"
-                                    onClick={clearDayAll}
-                                >
-                                    解除
-                                </Button>
-                                <span className="text-xs font-normal text-muted-foreground bg-accent px-2 py-0.5 rounded ml-1">
-                                    {format(focusedDate, "M月d日", { locale: ja })}
-                                </span>
-                            </div>
+                            <span className="text-xs font-normal text-muted-foreground bg-accent px-2 py-0.5 rounded">
+                                {format(focusedDate, "M月d日", { locale: ja })}
+                            </span>
                         )}
                     </h3>
                     <ScrollArea className="flex-1 pr-3">
-                        <div className="space-y-2">
+                        <div className="space-y-3">
                             {!focusedDate ? (
                                 <div className="text-sm text-muted-foreground text-center py-8">
                                     右側のカレンダーから日付を選択してください
                                 </div>
                             ) : (
                                 <>
+                                    <div className="flex flex-wrap items-center gap-1 sticky top-0 bg-card py-1 z-10">
+                                        {CUSTOM_PERIODS.length > 0 && (
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-7 px-2 text-[10px]"
+                                                onClick={selectDayPeriods}
+                                            >
+                                                時限を全選択
+                                            </Button>
+                                        )}
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 px-2 text-[10px]"
+                                            onClick={selectDayHourly}
+                                        >
+                                            1h毎を全選択
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="h-7 px-2 text-[10px] text-muted-foreground"
+                                            onClick={clearDayAll}
+                                        >
+                                            解除
+                                        </Button>
+                                    </div>
                                     {CustomPeriodsGrid && (
                                         <CustomPeriodsGrid
                                             groupedDates={{ [format(focusedDate, "yyyy-MM-dd")]: [] }}
@@ -363,7 +378,7 @@ export function PeriodSelector({
                                                     type="button"
                                                     variant="ghost"
                                                     size="icon"
-                                                    className="absolute top-1 right-1 w-6 h-6 opacity-0 group-hover/header:opacity-100 transition-opacity"
+                                                    className="absolute top-1 right-1 w-6 h-6 opacity-100"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         copyDaySelections(format(date, "yyyy-MM-dd"));

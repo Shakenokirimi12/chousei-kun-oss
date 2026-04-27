@@ -7,6 +7,7 @@ import { X, Triangle, Circle, ZoomIn, ZoomOut } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 interface AvailabilityTimelineProps {
     candidates: string[];
@@ -18,6 +19,7 @@ interface AvailabilityTimelineProps {
     mode?: "response" | "admin" | "results";
     confirmedCandidateIdx?: number | null;
     candidateStats?: { ok: number; maybe: number; ng: number }[];
+    candidateParticipants?: { ok: string[]; maybe: string[]; ng: string[] }[];
     onConfirmCandidate?: (idx: number) => void;
 }
 
@@ -70,11 +72,16 @@ export function AvailabilityTimeline({
     mode = "response",
     confirmedCandidateIdx = null,
     candidateStats = [],
+    candidateParticipants = [],
     onConfirmCandidate
 }: AvailabilityTimelineProps) {
     const [focusedDate, setFocusedDate] = React.useState<Date | null>(null);
     const viewportRef = React.useRef<HTMLDivElement>(null);
-    const [zoomLevel, setZoomLevel] = React.useState(1.2);
+    const [zoomLevel, setZoomLevel] = React.useState(1.8);
+    const [selectedParticipantView, setSelectedParticipantView] = React.useState<{
+        candidateIdx: number;
+        status: "ok" | "maybe" | "ng";
+    } | null>(null);
     const candidateScores = React.useMemo(
         () => candidateStats.map((s) => s.ok * 2 + s.maybe),
         [candidateStats]
@@ -155,6 +162,28 @@ export function AvailabilityTimeline({
             default: return null;
         }
     };
+    const getCandidateDisplayText = React.useCallback((idx: number) => {
+        const candidate = candidates[idx];
+        if (!candidate) return "";
+        const [datePart, slot] = candidate.split("_");
+        const type = slot.startsWith("P") ? "P" : "H";
+        const id = parseInt(slot.replace(/[PH]/, ""), 10);
+        const info = getSlotInfo(type, id);
+        const date = new Date(datePart);
+        const dateLabel = Number.isNaN(date.getTime()) ? datePart : format(date, "M/d(E)", { locale: ja });
+        return `${dateLabel} ${info?.label ?? ""} ${info?.sub ?? ""}`.trim();
+    }, [candidates]);
+    const selectedNames =
+        selectedParticipantView
+            ? (candidateParticipants[selectedParticipantView.candidateIdx]?.[selectedParticipantView.status] ?? [])
+            : [];
+    const selectedStatusLabel = selectedParticipantView
+        ? selectedParticipantView.status === "ok"
+            ? "○"
+            : selectedParticipantView.status === "maybe"
+                ? "△"
+                : "×"
+        : "";
 
     const renderTimeAxis = () => {
         const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i);
@@ -242,30 +271,32 @@ export function AvailabilityTimeline({
                                             isFocused ? "bg-primary/10 text-primary" : "bg-background hover:bg-muted/50"
                                         )}
                                     >
-                                        <div className="absolute top-0.5 right-0.5 flex gap-1 md:opacity-0 md:group-hover/header:opacity-100 transition-opacity">
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onDayStatusChange?.(dateStr, 2);
-                                                }}
-                                                className="w-4 h-4 rounded-full bg-green-100 text-green-600 hover:bg-green-600 hover:text-white transition-colors flex items-center justify-center"
-                                                title="この日のすべてを○にする"
-                                            >
-                                                <Circle className="w-2.5 h-2.5" />
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onDayStatusChange?.(dateStr, 0);
-                                                }}
-                                                className="w-4 h-4 rounded-full bg-red-100 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center"
-                                                title="この日のすべてを×にする"
-                                            >
-                                                <X className="w-2.5 h-2.5" />
-                                            </button>
-                                        </div>
+                                        {mode === "response" ? (
+                                            <div className="absolute top-0.5 right-0.5 flex gap-1 opacity-100">
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDayStatusChange?.(dateStr, 2);
+                                                    }}
+                                                    className="w-5 h-5 rounded-full border border-green-400/60 bg-green-100 text-green-600 hover:bg-green-600 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
+                                                    title="この日のすべてを○にする"
+                                                >
+                                                    <Circle className="w-3 h-3" />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        onDayStatusChange?.(dateStr, 0);
+                                                    }}
+                                                    className="w-5 h-5 rounded-full border border-red-400/60 bg-red-100 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
+                                                    title="この日のすべてを×にする"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
+                                        ) : null}
                                         <span className="text-[10px] uppercase leading-none">{format(date, "E", { locale: ja })}</span>
                                         <span className="text-sm font-bold leading-none mt-0.5">{format(date, "M/d", { locale: ja })}</span>
                                     </div>
@@ -391,15 +422,39 @@ export function AvailabilityTimeline({
                                                         {mode === "admin" || mode === "results" ? (
                                                             <div className="flex-1 flex flex-col justify-end gap-1">
                                                                 <div className="grid grid-cols-3 gap-1 text-[9px]">
-                                                                    <div className="rounded bg-green-500/20 text-green-700 text-center py-0.5">
+                                                                    <button
+                                                                        type="button"
+                                                                        className="rounded border border-green-400/50 bg-green-500/20 text-green-700 text-center py-1 hover:bg-green-500/35 transition-colors cursor-pointer"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setSelectedParticipantView({ candidateIdx: idx, status: "ok" });
+                                                                        }}
+                                                                        title="○を選択した参加者を見る"
+                                                                    >
                                                                         ○ {candidateStats[idx]?.ok ?? 0}
-                                                                    </div>
-                                                                    <div className="rounded bg-yellow-500/20 text-yellow-700 text-center py-0.5">
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        className="rounded border border-yellow-400/50 bg-yellow-500/20 text-yellow-700 text-center py-1 hover:bg-yellow-500/35 transition-colors cursor-pointer"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setSelectedParticipantView({ candidateIdx: idx, status: "maybe" });
+                                                                        }}
+                                                                        title="△を選択した参加者を見る"
+                                                                    >
                                                                         △ {candidateStats[idx]?.maybe ?? 0}
-                                                                    </div>
-                                                                    <div className="rounded bg-red-500/20 text-red-700 text-center py-0.5">
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        className="rounded border border-red-400/50 bg-red-500/20 text-red-700 text-center py-1 hover:bg-red-500/35 transition-colors cursor-pointer"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setSelectedParticipantView({ candidateIdx: idx, status: "ng" });
+                                                                        }}
+                                                                        title="×を選択した参加者を見る"
+                                                                    >
                                                                         × {candidateStats[idx]?.ng ?? 0}
-                                                                    </div>
+                                                                    </button>
                                                                 </div>
                                                                 {onConfirmCandidate ? (
                                                                     <button
@@ -475,6 +530,31 @@ export function AvailabilityTimeline({
                     </div>
                 </div>
             </ScrollArea>
+            <Dialog open={selectedParticipantView !== null} onOpenChange={(open) => !open && setSelectedParticipantView(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>
+                            {selectedStatusLabel} を選択した参加者
+                        </DialogTitle>
+                        <DialogDescription>
+                            {selectedParticipantView ? getCandidateDisplayText(selectedParticipantView.candidateIdx) : ""}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-64 overflow-y-auto text-sm">
+                        {selectedNames.length > 0 ? (
+                            <ul className="space-y-1">
+                                {selectedNames.map((name, index) => (
+                                    <li key={`${name}-${index}`} className="rounded border bg-muted/30 px-3 py-2">
+                                        {name}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="text-muted-foreground">該当する参加者はいません。</p>
+                        )}
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
