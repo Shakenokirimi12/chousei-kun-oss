@@ -11,13 +11,21 @@ export interface CalendarEvent {
 export class CampusSquareService {
     private static UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
 
-    private static getBaseUrl(): string {
+    private static getPortalUrl(): string {
         const url = process.env.CAMPUS_SQUARE_BASE_URL;
         if (!url) {
             throw new Error("Campus Square連携が設定されていません。");
         }
-        // Remove trailing slash if present
-        return url.replace(/\/$/, '');
+
+        // Accept both:
+        // - https://example.ac.jp
+        // - https://example.ac.jp/campusweb
+        const normalized = url.replace(/\/$/, "");
+        return normalized.endsWith("/campusweb") ? normalized : `${normalized}/campusweb`;
+    }
+
+    private static getOrigin(portalUrl: string): string {
+        return new URL(portalUrl).origin;
     }
 
     // Helper to extract JSESSIONID from raw headers
@@ -38,8 +46,8 @@ export class CampusSquareService {
             console.log('[CampusSquareService] STEP 1: Landing on portal');
 
             // STEP 1: Landing
-            const baseUrl = this.getBaseUrl();
-            const portalUrl = `${baseUrl}/campusweb`;
+            const portalUrl = this.getPortalUrl();
+            const origin = this.getOrigin(portalUrl);
 
             const res1 = await fetch(`${portalUrl}/campusportal.do?locale=ja_JP`, {
                 headers: { 'User-Agent': this.UA },
@@ -79,7 +87,7 @@ export class CampusSquareService {
                     'Cookie': `JSESSIONID=${initialSid}`,
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'Referer': `${portalUrl}/campusportal.do?locale=ja_JP`,
-                    'Origin': baseUrl
+                    'Origin': origin
                 },
             });
 

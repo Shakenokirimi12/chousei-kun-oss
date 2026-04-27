@@ -26,28 +26,63 @@ if [ $LOGIN_EXIT_CODE -ne 0 ]; then
   fi
 fi
 
-# 複数アカウントがある場合の対応
-ACCOUNT_ID=""
+# アカウント選択
+echo "📋 利用可能なCloudflareアカウントを取得しています..."
 set +e
-LOGIN_CHECK=$(pnpm exec wrangler whoami 2>&1)
+WHOAMI_OUTPUT=$(pnpm exec wrangler whoami 2>&1)
 set -e
-if echo "$LOGIN_CHECK" | grep -qi "More than one account available"; then
-  echo "⚠️ 複数のCloudflareアカウントが検出されました。"
-  echo "以下のリストを参考に、リソースを作成するアカウントのIDを入力してください。"
-  
-  # 利用可能なアカウントのみを抽出して表示（エラーメッセージから）
-  echo "$LOGIN_CHECK" | grep '`.*`:' || true
-  
-  echo ""
-  read -p "Account ID: " ACCOUNT_ID
-  export CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID
-  
-  # 環境変数を.envに書き込む (.env.exampleが存在する場合)
-  if [ -f ".env.example" ]; then
-    if ! grep -q "CLOUDFLARE_ACCOUNT_ID=" .env 2>/dev/null; then
-      echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> .env
-      echo "※ アカウントIDを .env ファイルに保存しました。以降のコマンドで自動的に利用されます。"
+
+# wrangler whoami のテーブル出力からアカウント名とIDを抽出
+# テーブル行は "│ Account Name │ Account ID │" の形式
+ACCOUNTS=()
+ACCOUNT_NAMES=()
+while IFS= read -r line; do
+  if echo "$line" | grep -q '│' && ! echo "$line" | grep -q '[┌┐└┘├┤┬┴┼─]' && ! echo "$line" | grep -qi 'Account Name'; then
+    ACCT_NAME=$(echo "$line" | awk -F '│' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')
+    ACCT_ID=$(echo "$line" | awk -F '│' '{gsub(/^[ \t]+|[ \t]+$/, "", $3); print $3}')
+    if [ -n "$ACCT_ID" ]; then
+      ACCOUNTS+=("$ACCT_ID")
+      ACCOUNT_NAMES+=("$ACCT_NAME")
     fi
+  fi
+done <<< "$WHOAMI_OUTPUT"
+
+ACCOUNT_ID=""
+
+if [ ${#ACCOUNTS[@]} -eq 0 ]; then
+  echo "⚠️ アカウント情報を自動取得できませんでした。"
+  read -p "Account IDを手動で入力してください: " ACCOUNT_ID
+  export CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID
+elif [ ${#ACCOUNTS[@]} -eq 1 ]; then
+  ACCOUNT_ID="${ACCOUNTS[0]}"
+  echo "✅ アカウント: ${ACCOUNT_NAMES[0]} (${ACCOUNT_ID})"
+  export CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID
+else
+  echo ""
+  echo "複数のCloudflareアカウントが検出されました。デプロイ先を選択してください:"
+  echo ""
+  for i in "${!ACCOUNTS[@]}"; do
+    echo "  $((i+1))) ${ACCOUNT_NAMES[$i]} (${ACCOUNTS[$i]})"
+  done
+  echo ""
+  while true; do
+    read -p "番号を入力してください [1-${#ACCOUNTS[@]}]: " SELECTION
+    if [[ "$SELECTION" =~ ^[0-9]+$ ]] && [ "$SELECTION" -ge 1 ] && [ "$SELECTION" -le "${#ACCOUNTS[@]}" ]; then
+      ACCOUNT_ID="${ACCOUNTS[$((SELECTION-1))]}"
+      echo "✅ 選択: ${ACCOUNT_NAMES[$((SELECTION-1))]} (${ACCOUNT_ID})"
+      export CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID
+      break
+    else
+      echo "⚠️ 無効な入力です。1〜${#ACCOUNTS[@]}の番号を入力してください。"
+    fi
+  done
+fi
+
+# アカウントIDを .env に保存
+if [ -n "$ACCOUNT_ID" ] && [ -f ".env.example" ]; then
+  if ! grep -q "CLOUDFLARE_ACCOUNT_ID=" .env 2>/dev/null; then
+    echo "CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID" >> .env
+    echo "※ アカウントIDを .env ファイルに保存しました。"
   fi
 fi
 

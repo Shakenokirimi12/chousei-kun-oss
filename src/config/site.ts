@@ -1,7 +1,7 @@
 export const siteConfig = {
     name: "調整くん",
     description: "スケジュール調整・キャンパス連携アプリ",
-    url: "https://example.com",
+    url: "https://schedule.soshosai.com",
     ui: {
         createEvent: {
             title: "新しい予定表を作成",

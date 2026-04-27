@@ -12,7 +12,7 @@
 		"url": "https://github.com/shakenokiri/chousei-kun-oss/issues"
 	},
 	"scripts": {
-		"dev": "next dev",
+		"dev": "next dev --webpack",
 		"build": "next build",
 		"start": "next start",
 		"lint": "next lint",
