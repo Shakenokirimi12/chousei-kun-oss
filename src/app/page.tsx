@@ -99,10 +99,39 @@ export default function LandingPage() {
 							</p>
 							<p>
 								主な機能として、候補日時の作成、参加者への共有、出欠の集計、最終日程の決定と通知があります。
-								Googleカレンダーと連携することで、既存の予定を考慮した回答が可能です。
 							</p>
 							<p>
 								アカウント登録は不要で、URLを共有するだけですぐに利用を開始できます。
+							</p>
+						</div>
+					</article>
+				</section>
+
+				{/* Google Calendar Integration Section */}
+				<section className="max-w-5xl mx-auto px-4 py-12" aria-labelledby="google-integration-title">
+					<article className="p-8 rounded-lg border bg-card/30">
+						<h2 id="google-integration-title" className="text-xl font-semibold mb-4">Googleカレンダー連携について</h2>
+						<div className="space-y-4 text-muted-foreground">
+							<p>
+								<strong className="text-foreground">{siteConfig.name}</strong> では、Googleカレンダーと連携することで、より便利に日程調整を行うことができます。
+							</p>
+							<h3 className="text-lg font-medium text-foreground mt-6">Googleカレンダーデータの使用目的</h3>
+							<ul className="list-disc list-inside space-y-2 ml-4">
+								<li>
+									<strong>既存の予定の確認:</strong> あなたのGoogleカレンダーの予定を読み取り、候補日時と重複する予定を自動的に検出します。これにより、空いている日時を簡単に把握できます。
+								</li>
+								<li>
+									<strong>カレンダーへの予定追加:</strong> 日程が確定した際に、参加者のGoogleカレンダーに予定を自動で追加し、招待を送信できます。
+								</li>
+							</ul>
+							<h3 className="text-lg font-medium text-foreground mt-6">データの取り扱い</h3>
+							<ul className="list-disc list-inside space-y-2 ml-4">
+								<li>Googleカレンダーへのアクセスは任意です。連携しなくても基本機能は利用できます。</li>
+								<li>取得したカレンダーデータはお使いのブラウザ内でのみ処理され、当サービスのサーバーには保存されません。</li>
+								<li>いつでもGoogleアカウントの設定からアクセス権を取り消すことができます。</li>
+							</ul>
+							<p className="mt-4">
+								詳しくは <Link href="/privacy" className="text-primary underline underline-offset-4 hover:text-primary/80">プライバシーポリシー</Link> をご確認ください。
 							</p>
 						</div>
 					</article>
