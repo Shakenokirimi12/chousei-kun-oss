@@ -1,6 +1,6 @@
 export const siteConfig = {
     name: "調整くん",
-    description: "スケジュール調整・キャンパス連携アプリ",
+    description: "調整くんは、イベントの日程候補を作成し、参加者の出欠を集計して最適な日程を決めるためのスケジュール調整アプリです。",
     url: "https://schedule.soshosai.com",
     ui: {
         createEvent: {
