@@ -83,6 +83,19 @@ export function PeriodSelector({
             newDateToFocus = sorted.find(d => !viewDates.some(vd => vd.getTime() === d.getTime()));
         }
 
+        // Find removed dates and clean up their periods from selectedPeriods
+        const removedDates = viewDates.filter(vd => !sorted.some(d => d.getTime() === vd.getTime()));
+        if (removedDates.length > 0) {
+            const removedDateStrs = removedDates.map(d => format(d, "yyyy-MM-dd"));
+            const cleanedPeriods = selectedPeriods.filter(p => {
+                const [dateStr] = p.split("_");
+                return !removedDateStrs.includes(dateStr);
+            });
+            if (cleanedPeriods.length !== selectedPeriods.length) {
+                onChange(cleanedPeriods);
+            }
+        }
+
         setViewDates(sorted);
 
         // Auto-focus logic
