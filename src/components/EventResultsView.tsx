@@ -1,6 +1,9 @@
 "use client";
 
 import { memo, useMemo } from "react";
+import Link from "next/link";
+import { Users } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
 import { ParticipantComments } from "@/components/ParticipantComments";
 import { ConfirmedScheduleCard } from "@/components/ConfirmedScheduleCard";
@@ -12,7 +15,6 @@ type Participant = {
 };
 
 type Availability = {
-    id: string;
     participantId: string;
     candidateIdx: number;
     status: number;
@@ -93,6 +95,16 @@ export const EventResultsView = memo(function EventResultsView({
                     confirmedCandidate={confirmedCandidate}
                 />
             )}
+            {participants.length === 0 && (
+                <div className="rounded-lg border border-dashed p-8 text-center">
+                    <Users className="mx-auto h-8 w-8 text-muted-foreground/60" />
+                    <p className="mt-3 font-medium">まだ回答がありません</p>
+                    <p className="mt-1 text-sm text-muted-foreground">最初の回答者になりましょう。</p>
+                    <Link href={`/${eventId}`} className="inline-block mt-4">
+                        <Button>回答する</Button>
+                    </Link>
+                </div>
+            )}
             <AvailabilityTimeline
                 candidates={candidates}
                 availabilities={candidates.map(() => 2)}
@@ -103,7 +115,7 @@ export const EventResultsView = memo(function EventResultsView({
                 candidateStats={candidateStats}
                 candidateParticipants={candidateParticipants}
             />
-            <ParticipantComments participants={participants} />
+            {participants.length > 0 && <ParticipantComments participants={participants} />}
         </div>
     );
 });

@@ -281,7 +281,7 @@ export function AdminEventSettings({
                         <PeriodSelector
                             selectedPeriods={selectedPeriods}
                             onChange={setSelectedPeriods}
-                            busyPeriods={[]}
+                            busyPeriodIds={[]}
                         />
                     </div>
                 </TabsContent>

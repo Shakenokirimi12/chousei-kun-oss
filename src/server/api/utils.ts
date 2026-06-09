@@ -3,6 +3,7 @@ import type { DbClient } from "@/server/db/client";
 import { googleOauthSessions } from "@/server/db/schema";
 import { CUSTOM_PERIODS } from "@/config/periods";
 import type { CandidateWindow } from "@/types";
+import { encryptToken, decryptToken } from "@/lib/token-crypto";
 
 export const GOOGLE_SCOPES = [
     "openid",
@@ -78,15 +79,26 @@ export function parseCandidateWindow(candidate: string): CandidateWindow | null 
     return null;
 }
 
+/**
+ * セッションを取得し、必要ならアクセストークンをリフレッシュする。
+ * 戻り値の accessToken / refreshToken は復号済み（平文）。
+ */
 export async function refreshGoogleTokenIfNeeded(db: DbClient, sessionId: string) {
     const record = await db.query.googleOauthSessions.findFirst({
         where: eq(googleOauthSessions.sessionId, sessionId),
     });
     if (!record) return null;
 
+    const refreshToken = await decryptToken(record.refreshToken);
+    const decryptedRecord = {
+        ...record,
+        accessToken: (await decryptToken(record.accessToken))!,
+        refreshToken,
+    };
+
     const nowSec = Math.floor(Date.now() / 1000);
-    if (record.expiresAt > nowSec + 60) return record;
-    if (!record.refreshToken) return record;
+    if (decryptedRecord.expiresAt > nowSec + 60) return decryptedRecord;
+    if (!refreshToken) return decryptedRecord;
 
     const clientId = getEnvOrThrow("GOOGLE_CLIENT_ID");
     const clientSecret = getEnvOrThrow("GOOGLE_CLIENT_SECRET");
@@ -97,24 +109,27 @@ export async function refreshGoogleTokenIfNeeded(db: DbClient, sessionId: string
             client_id: clientId,
             client_secret: clientSecret,
             grant_type: "refresh_token",
-            refresh_token: record.refreshToken,
+            refresh_token: refreshToken,
         }),
+        signal: AbortSignal.timeout(10_000),
     });
-    if (!tokenRes.ok) return record;
+    if (!tokenRes.ok) return decryptedRecord;
     const tokenJson = await tokenRes.json() as { access_token: string; expires_in: number };
     const updatedExpiresAt = Math.floor(Date.now() / 1000) + tokenJson.expires_in;
     await db
         .update(googleOauthSessions)
         .set({
-            accessToken: tokenJson.access_token,
+            accessToken: (await encryptToken(tokenJson.access_token))!,
             expiresAt: updatedExpiresAt,
             updatedAt: Date.now(),
         })
         .where(eq(googleOauthSessions.sessionId, sessionId));
 
-    return await db.query.googleOauthSessions.findFirst({
-        where: eq(googleOauthSessions.sessionId, sessionId),
-    });
+    return {
+        ...decryptedRecord,
+        accessToken: tokenJson.access_token,
+        expiresAt: updatedExpiresAt,
+    };
 }
 
 export async function getGoogleSessionAndScopes(db: DbClient, sessionId: string) {
@@ -124,7 +139,8 @@ export async function getGoogleSessionAndScopes(db: DbClient, sessionId: string)
     }
 
     const tokenInfoRes = await fetch(
-        `https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${encodeURIComponent(session.accessToken)}`
+        `https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${encodeURIComponent(session.accessToken)}`,
+        { signal: AbortSignal.timeout(10_000) }
     );
     if (!tokenInfoRes.ok) {
         return { session, scopes: [] as string[] };

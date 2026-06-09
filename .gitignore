@@ -54,3 +54,6 @@ wrangler.jsonc
 
 
 !.dev.vars.example
+
+# Local Claude Code preview launch config
+.claude/

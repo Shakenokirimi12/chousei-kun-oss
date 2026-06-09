@@ -52,6 +52,59 @@ export const availabilities = sqliteTable("availabilities", {
 });
 
 /**
+ * Office Hour（Time Slot 予約）スケジュール本体
+ * 主催者はGoogle + 大学カレンダー連携が必須。Cron で busy を同期する。
+ */
+export const officeHours = sqliteTable("office_hours", {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    description: text("description"),
+    startDate: integer("start_date").notNull(),
+    endDate: integer("end_date").notNull(),
+    windows: text("windows").notNull(),                 // JSON
+    slotDurationMin: integer("slot_duration_min").notNull(),
+    capacityPerSlot: integer("capacity_per_slot").notNull().default(1),
+    bufferMin: integer("buffer_min").notNull().default(0),
+    adminPasswordHash: text("admin_password_hash").notNull(),
+    adminAccessToken: text("admin_access_token").notNull(),
+    hostUserId: text("host_user_id").notNull(),
+    hostGoogleSessionId: text("host_google_session_id").notNull(),
+    // 大学カレンダーは iCal URL を直接保管（認証情報は持たない）。
+    // URL 自体が長期的なクレデンシャルなので AES-GCM で暗号化保存する。
+    hostIcalUrl: text("host_ical_url").notNull(),
+    lastSyncAt: integer("last_sync_at"),
+    lastSyncError: text("last_sync_error"),
+    createdAt: integer("created_at").notNull(),
+});
+
+/**
+ * Office Hour の予約レコード（1枠複数人可）
+ */
+export const officeHourBookings = sqliteTable("office_hour_bookings", {
+    id: text("id").primaryKey(),
+    officeHourId: text("office_hour_id").notNull(),
+    slotStart: integer("slot_start").notNull(),
+    name: text("name").notNull(),
+    comment: text("comment"),
+    email: text("email"),
+    userId: text("user_id"),
+    createdAt: integer("created_at").notNull(),
+});
+
+/**
+ * 主催者の busy 予定キャッシュ（Cron が洗い替え）
+ */
+export const officeHourHostBusy = sqliteTable("office_hour_host_busy", {
+    id: text("id").primaryKey(),
+    officeHourId: text("office_hour_id").notNull(),
+    source: text("source").notNull(),                   // 'google' | 'campus'
+    startMs: integer("start_ms").notNull(),
+    endMs: integer("end_ms").notNull(),
+    summary: text("summary"),
+    fetchedAt: integer("fetched_at").notNull(),
+});
+
+/**
  * Google OAuth セッションテーブル
  * Googleアカウント連携情報
  */

@@ -15,12 +15,13 @@ import dynamic from "next/dynamic";
 import { useUser } from "@/hooks/useUser";
 import { logActivity } from "@/hooks/useActivityLog";
 
-const CampusSquareImport = dynamic(() => import("@/components/CampusSquareImport"), { ssr: false });
+const AISchedulingAssistant = dynamic(() => import("@/components/AISchedulingAssistant"), { ssr: false });
+const CalendarImportMenu = dynamic(() => import("@/components/CalendarImportMenu"), { ssr: false });
 
 interface ResponseFormProps {
   eventId: string;
   candidates: string[];
-  participants: { id: string; name: string; comment: string | null; notifyOnFinalize?: number; notificationEmail?: string | null }[];
+  participants: { id: string; name: string; comment: string | null }[];
   allAvailabilities: { participantId: string; candidateIdx: number; status: number }[];
   onSuccess: () => Promise<void>;
 }
@@ -225,31 +226,44 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
   // Load existing participant from localStorage
   React.useEffect(() => {
     const storedId = localStorage.getItem(`chosei_participant_${eventId}`);
-    if (storedId) {
-      const existingParticipant = participants.find((p) => p.id === storedId);
-      if (existingParticipant) {
-        setParticipantId(storedId);
-        setName(existingParticipant.name);
-        setComment(existingParticipant.comment || "");
-        setNotifyOnFinalize((existingParticipant.notifyOnFinalize ?? 0) === 1);
-        setNotificationEmail(existingParticipant.notificationEmail || "");
+    if (!storedId) return;
 
-        // Reconstruct availabilities
-        const myAvails = allAvailabilities.filter((a) => a.participantId === storedId);
-        const newAvails = new Array(candidates.length).fill(2); // Default to O
-        // Note: If no availability record exists for a candidate, it remains default.
-        // But usually we save all.
-        myAvails.forEach((a) => {
-          if (a.candidateIdx < newAvails.length) {
-            newAvails[a.candidateIdx] = a.status;
-          }
-        });
-        setAvailabilities(newAvails);
-      } else {
-        // Stored ID not found in server data (maybe deleted), clear it
-        localStorage.removeItem(`chosei_participant_${eventId}`);
-      }
+    const existingParticipant = participants.find((p) => p.id === storedId);
+    if (!existingParticipant) {
+      // Stored ID not found in server data (maybe deleted), clear it
+      localStorage.removeItem(`chosei_participant_${eventId}`);
+      return;
     }
+
+    setParticipantId(storedId);
+    setName(existingParticipant.name);
+    setComment(existingParticipant.comment || "");
+
+    // Reconstruct availabilities from the (PII-free) availability list
+    const myAvails = allAvailabilities.filter((a) => a.participantId === storedId);
+    const newAvails = new Array(candidates.length).fill(2); // Default to O
+    myAvails.forEach((a) => {
+      if (a.candidateIdx < newAvails.length) {
+        newAvails[a.candidateIdx] = a.status;
+      }
+    });
+    setAvailabilities(newAvails);
+
+    // Fetch the participant's OWN notification settings (not exposed in the public list).
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/events/${eventId}/participant/${storedId}`);
+        if (!res.ok || cancelled) return;
+        const own = (await res.json()) as { notifyOnFinalize?: number; notificationEmail?: string | null };
+        if (cancelled) return;
+        setNotifyOnFinalize((own.notifyOnFinalize ?? 0) === 1);
+        setNotificationEmail(own.notificationEmail || "");
+      } catch {
+        // 通知設定の取得失敗は致命的ではない（既定値のまま）。
+      }
+    })();
+    return () => { cancelled = true; };
   }, [eventId, participants, allAvailabilities, candidates.length]);
 
   // Helper to parse candidate string "YYYY-MM-DD_P#" or legacy "YYYY-MM-DD_H#"
@@ -274,6 +288,53 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     return { date, period };
   }, []);
 
+  const [busyEvents, setBusyEvents] = React.useState<{ start: string; end: string; summary: string }[]>([]);
+
+  const mapEventsToPeriods = React.useCallback((events: any[]) => {
+    const newBusyPeriods: string[] = [];
+
+    events.forEach((event) => {
+      const startDate = new Date(event.dtstart || event.start);
+      const endDate = new Date(event.dtend || event.end);
+      const dateStr = startDate.toISOString().split("T")[0];
+
+      const checkOverlap = (startA: Date, endA: Date, startB: Date, endB: Date) => {
+        return startA < endB && endA > startB;
+      };
+
+      CUSTOM_PERIODS.forEach((p: any) => {
+        const [startH, startM] = p.time.split("-")[0].split(":").map(Number);
+        const [endH, endM] = p.time.split("-")[1].split(":").map(Number);
+
+        const pStart = new Date(startDate);
+        pStart.setHours(startH, startM, 0, 0);
+        const pEnd = new Date(startDate);
+        pEnd.setHours(endH, endM, 0, 0);
+
+        if (checkOverlap(startDate, endDate, pStart, pEnd)) {
+          newBusyPeriods.push(`${dateStr}_P${p.id}`);
+        }
+      });
+
+      HOURLY_SLOTS.forEach((h) => {
+        const [startH] = h.time.split("-")[0].split(":").map(Number);
+        const pStart = new Date(startDate);
+        pStart.setHours(startH, 0, 0, 0);
+        const pEnd = new Date(startDate);
+        pEnd.setHours(startH + 1, 0, 0, 0);
+
+        if (checkOverlap(startDate, endDate, pStart, pEnd)) {
+          newBusyPeriods.push(`${dateStr}_H${h.id}`);
+        }
+      });
+    });
+    return [...new Set(newBusyPeriods)];
+  }, []);
+
+  const busyPeriodIds = React.useMemo(() => {
+    return mapEventsToPeriods(busyEvents);
+  }, [busyEvents, mapEventsToPeriods]);
+
   const handleCampusSquareImport = async (uid: string, pass: string) => {
     if (!ENABLE_CAMPUS_SQUARE) return;
     setIsCampusImporting(true);
@@ -290,55 +351,102 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
       }
 
       const data = (await res.json()) as { events: { dtstart: string; dtend: string }[] };
-
-      // Conflict Detection
-      const newAvailabilities = [...availabilities];
-      let conflictCount = 0;
-
-      candidates.forEach((candidate, idx) => {
-        const { date, period } = parseCandidate(candidate);
-        if (!period) return;
-
-        const [startH, startM] = period.time.split("-")[0].split(":").map(Number);
-        const [endH, endM] = period.time.split("-")[1].split(":").map(Number);
-        const dateOnly = new Date(date);
-        dateOnly.setHours(0, 0, 0, 0);
-
-        const cStart = new Date(dateOnly);
-        cStart.setHours(startH, startM, 0, 0);
-        const cEnd = new Date(dateOnly);
-        cEnd.setHours(endH, endM, 0, 0);
-
-        // Check against each imported event
-        const hasConflict = data.events.some((ev) => {
-          const eStart = new Date(ev.dtstart);
-          const eEnd = new Date(ev.dtend);
-          return cStart < eEnd && cEnd > eStart;
-        });
-
-        if (hasConflict) {
-          newAvailabilities[idx] = 0; // Mark as X
-          conflictCount++;
-        }
-      });
-
-      setAvailabilities(newAvailabilities);
-
-      if (conflictCount > 0) {
-        setFeedback({
-          title: "インポート成功",
-          message: `スケジュールをインポートしました。${conflictCount}件の重複スロットを「×」に設定しました。`,
-          isOpen: true,
-        });
-      } else {
-        setFeedback({
-          title: "インポート成功",
-          message: "スケジュールをインポートしました。候補日程との重複はありませんでした。",
-          isOpen: true,
-        });
-      }
+      applyImportedEvents(data.events);
     } finally {
       setIsCampusImporting(false);
+    }
+  };
+
+  const handleICalImport = async (url: string) => {
+    setIsCampusImporting(true);
+    try {
+      const res = await fetch("/api/sync-ical", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+
+      if (!res.ok) {
+        const error = (await res.json()) as { error: string };
+        throw new Error(error.error || "インポートに失敗しました");
+      }
+
+      const data = (await res.json()) as { events: { dtstart: string; dtend: string }[] };
+      applyImportedEvents(data.events);
+    } catch (e: any) {
+      setFeedback({
+        title: "エラー",
+        message: e.message || "インポートに失敗しました",
+        isOpen: true,
+      });
+    } finally {
+      setIsCampusImporting(false);
+    }
+  };
+
+  const applyImportedEvents = (events: { dtstart: string; dtend: string; summary?: string }[]) => {
+    // Populate busy events for display
+    const newEvents = events.map(ev => ({
+        start: ev.dtstart,
+        end: ev.dtend,
+        summary: ev.summary || "予定あり"
+    }));
+
+    setBusyEvents((prev) => {
+      const next = [...prev];
+      newEvents.forEach((ne) => {
+        if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+          next.push(ne);
+        }
+      });
+      return next;
+    });
+
+    // Conflict Detection
+    const newAvailabilities = [...availabilities];
+    let conflictCount = 0;
+
+    candidates.forEach((candidate, idx) => {
+      const { date, period } = parseCandidate(candidate);
+      if (!period) return;
+
+      const [startH, startM] = period.time.split("-")[0].split(":").map(Number);
+      const [endH, endM] = period.time.split("-")[1].split(":").map(Number);
+      const dateOnly = new Date(date);
+      dateOnly.setHours(0, 0, 0, 0);
+
+      const cStart = new Date(dateOnly);
+      cStart.setHours(startH, startM, 0, 0);
+      const cEnd = new Date(dateOnly);
+      cEnd.setHours(endH, endM, 0, 0);
+
+      // Check against each imported event
+      const hasConflict = events.some((ev) => {
+        const eStart = new Date(ev.dtstart);
+        const eEnd = new Date(ev.dtend);
+        return cStart < eEnd && cEnd > eStart;
+      });
+
+      if (hasConflict) {
+        newAvailabilities[idx] = 0; // Mark as X
+        conflictCount++;
+      }
+    });
+
+    setAvailabilities(newAvailabilities);
+
+    if (conflictCount > 0) {
+      setFeedback({
+        title: "インポート成功",
+        message: `スケジュールをインポートしました。${conflictCount}件の重複スロットを「×」に設定しました。`,
+        isOpen: true,
+      });
+    } else {
+      setFeedback({
+        title: "インポート成功",
+        message: "スケジュールをインポートしました。候補日程との重複はありませんでした。",
+        isOpen: true,
+      });
     }
   };
 
@@ -368,6 +476,23 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
       };
       const events = (googleData.events || []).filter((ev: any) => !isExcludedCalendarEvent(ev));
       const detectedEmail = googleData.email || "";
+
+      // Populate busy events for display
+      const newEvents = events.map(ev => ({
+          start: ev.dtstart,
+          end: ev.dtend,
+          summary: ev.summary || "予定あり"
+      }));
+
+      setBusyEvents((prev) => {
+        const next = [...prev];
+        newEvents.forEach((ne) => {
+          if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+            next.push(ne);
+          }
+        });
+        return next;
+      });
 
       if (detectedEmail) {
         setNotificationEmail(detectedEmail);
@@ -422,9 +547,28 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
 
   const handleSubmit = async () => {
     const trimmedName = name.trim();
+    const trimmedEmail = notificationEmail.trim();
     const isEditing = Boolean(participantId);
     if (!trimmedName) return;
-    
+
+    // メール通知を希望する場合のクライアント側バリデーション
+    if (notifyOnFinalize && !trimmedEmail) {
+      setFeedback({
+        title: "メールアドレスが必要です",
+        message: "通知を受け取るにはメールアドレスを入力してください。",
+        isOpen: true,
+      });
+      return;
+    }
+    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setFeedback({
+        title: "メールアドレスの形式が正しくありません",
+        message: "正しい形式のメールアドレスを入力してください。",
+        isOpen: true,
+      });
+      return;
+    }
+
     logActivity(isEditing ? "回答更新開始" : "回答送信開始", `イベント: ${eventId}`);
     setIsSubmitting(true);
     try {
@@ -438,7 +582,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
           participantId: participantId || undefined,
           userId: userId || undefined,
           notifyOnFinalize: notifyOnFinalize,
-          notificationEmail: notificationEmail.trim(),
+          notificationEmail: trimmedEmail,
         }),
       });
 
@@ -477,74 +621,102 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     }
   };
 
+  const [isAIPaneOpen, setIsAIPaneOpen] = React.useState(false);
+
   return (
-    <div className="w-full mt-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div>
+    <div className="w-full mt-6 animate-in fade-in slide-in-from-bottom-4 duration-700 flex overflow-hidden min-h-[600px]">
+      <div className={cn("flex-1 flex flex-col min-w-0 px-0 sm:px-2 lg:px-4 overflow-y-auto transition-all duration-300", isAIPaneOpen ? "lg:mr-0" : "")}>
+        <div className="mb-6">
           <h3 className="text-2xl font-bold">{participantId ? siteConfig.ui.responseEvent.titleEdit : siteConfig.ui.responseEvent.titleNew}</h3>
-          <p className="text-muted-foreground">{participantId ? siteConfig.ui.responseEvent.descriptionEdit : siteConfig.ui.responseEvent.descriptionNew}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {ENABLE_CAMPUS_SQUARE && <CampusSquareImport onImport={handleCampusSquareImport} buttonLabel="時間割をインポート" description="スケジュールの重複を確認します。重複するスロットは自動的に「×」に設定されます。" actionLabel="インポートして重複を確認" />}
-          <Button variant="outline" size="sm" type="button" onClick={handleGoogleImport} className="gap-2" disabled={isGoogleImporting}>
-            {isGoogleImporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarIcon className="h-4 w-4" />}
-            {isGoogleImporting ? "読み込み中..." : "Googleカレンダーをインポート"}
-          </Button>
-        </div>
-        {(isCampusImporting || isGoogleImporting) && (
-          <p className="text-sm text-muted-foreground">カレンダーを読み込み中です...</p>
-        )}
-      </div>
-
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="space-y-2">
-            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">お名前</label>
-            <Input placeholder="名前を入力してください" value={name} onChange={(e) => setName(e.target.value)} required className="bg-background/50 backdrop-blur-sm" />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">コメント (任意)</label>
-            <Input placeholder="メッセージがあれば入力してください" value={comment} onChange={(e) => setComment(e.target.value)} className="bg-background/50 backdrop-blur-sm" />
-          </div>
-        </div>
-        <div className="space-y-4">
-          <label className="text-sm font-medium leading-none">出欠を選択 (カレンダー内をタップして切り替え)</label>
-          <div className="flex flex-wrap gap-2 mb-2">
-            <Button variant="outline" size="sm" type="button" onClick={() => setAllStatus(2)} className="bg-green-500/5 hover:bg-green-500/10 text-green-600 border-green-200">
-              <Circle className="w-3 h-3 mr-1" /> 全て○にする
-            </Button>
-            <Button variant="outline" size="sm" type="button" onClick={() => setAllStatus(0)} className="bg-red-500/5 hover:bg-red-500/10 text-red-600 border-red-200">
-              <X className="w-3 h-3 mr-1" /> 全て×にする
-            </Button>
-          </div>
-          <AvailabilityTimeline
-            candidates={candidates}
-            availabilities={availabilities}
-            onStatusChange={handleStatusChange}
-            onDayStatusChange={handleDayStatusChange}
-            busyPeriods={[]} // We could pass actual busy periods if we fetch them for current user
-            okCounts={okCounts}
-          />
-          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground justify-center py-2">
-            <div className="flex items-center gap-1.5">
-              <Circle className="w-3 h-3 text-green-500" /> 参加可能
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Triangle className="w-3 h-3 text-yellow-500" /> 調整中
-            </div>
-            <div className="flex items-center gap-1.5">
-              <X className="w-3 h-3 text-red-500" /> 不参加
-            </div>
-          </div>
+          <p className="text-muted-foreground mt-0.5">{participantId ? siteConfig.ui.responseEvent.descriptionEdit : siteConfig.ui.responseEvent.descriptionNew}</p>
+          {(isCampusImporting || isGoogleImporting) && (
+            <p className="text-sm text-muted-foreground mt-2">カレンダーを読み込み中です...</p>
+          )}
         </div>
 
-        <div className="pt-4 flex justify-end">
-          <Button className="shadow-lg shadow-primary/20 min-w-40" size="lg" onClick={handleSubmit} disabled={!name.trim() || isSubmitting}>
-            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {participantId ? "回答を更新" : "回答を送信"}
-          </Button>
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
+            <div className="space-y-1.5">
+              <label htmlFor="participant-name" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">お名前</label>
+              <Input id="participant-name" placeholder="名前を入力してください" value={name} onChange={(e) => setName(e.target.value)} required aria-required="true" maxLength={100} className="bg-background/50 backdrop-blur-sm" />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="participant-comment" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">コメント (任意)</label>
+              <Input id="participant-comment" placeholder="メッセージがあれば入力してください" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={1000} className="bg-background/50 backdrop-blur-sm" />
+            </div>
+          </div>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-sm font-medium leading-none">出欠を選択 <span className="text-muted-foreground font-normal">(カレンダー内をタップして切り替え)</span></label>
+              <CalendarImportMenu
+                triggerLabel="自分の予定から取り込む"
+                title="自分の予定から出欠を自動入力"
+                description="取り込んだ予定と重なる時間は自動で「×」に設定されます。"
+                enableCampusSquare={ENABLE_CAMPUS_SQUARE}
+                onGoogleImport={handleGoogleImport}
+                onGoogleImportLoading={isGoogleImporting}
+                onCampusImport={handleCampusSquareImport}
+                onICalImport={handleICalImport}
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" type="button" onClick={() => setAllStatus(2)} className="bg-green-500/5 hover:bg-green-500/10 text-green-600 border-green-200">
+                <Circle className="w-3 h-3 mr-1" /> 全て○にする
+              </Button>
+              <Button variant="outline" size="sm" type="button" onClick={() => setAllStatus(0)} className="bg-red-500/5 hover:bg-red-500/10 text-red-600 border-red-200">
+                <X className="w-3 h-3 mr-1" /> 全て×にする
+              </Button>
+            </div>
+            <AvailabilityTimeline
+              candidates={candidates}
+              availabilities={availabilities}
+              onStatusChange={handleStatusChange}
+              onDayStatusChange={handleDayStatusChange}
+              busyEvents={busyEvents}
+              okCounts={okCounts}
+            />
+            <div className="flex flex-wrap gap-4 text-xs text-muted-foreground justify-center py-2">
+              <div className="flex items-center gap-1.5">
+                <Circle className="w-3 h-3 text-green-500" /> 参加可能
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Triangle className="w-3 h-3 text-yellow-500" /> 調整中
+              </div>
+              <div className="flex items-center gap-1.5">
+                <X className="w-3 h-3 text-red-500" /> 不参加
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 flex justify-end">
+            <Button className="shadow-lg shadow-primary/20 min-w-40" size="lg" onClick={handleSubmit} disabled={!name.trim() || isSubmitting}>
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {participantId ? "回答を更新" : "回答を送信"}
+            </Button>
+          </div>
         </div>
       </div>
+
+      <AISchedulingAssistant
+        mode="respond"
+        candidates={candidates}
+        currentSchedule={candidates.map((c, i) => `${c}:${availabilities[i]}`)}
+        onChange={(updated) => {
+          const newAvails = [...availabilities];
+          updated.forEach((item) => {
+            const [candidate, status] = item.split(":");
+            const idx = candidates.indexOf(candidate);
+            if (idx !== -1) {
+              const s = parseInt(status);
+              if (!isNaN(s)) newAvails[idx] = s;
+            }
+          });
+          setAvailabilities(newAvails);
+        }}
+        isOpen={isAIPaneOpen}
+        onOpen={() => setIsAIPaneOpen(true)}
+        onClose={() => setIsAIPaneOpen(false)}
+      />
 
       {/* Feedback Dialog */}
       <Dialog open={feedback.isOpen} onOpenChange={closeFeedback}>

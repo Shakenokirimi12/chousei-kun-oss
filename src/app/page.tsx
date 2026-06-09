@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { siteConfig } from "@/config/site";
-import { Calendar, Users, CheckCircle, ArrowRight } from "lucide-react";
+import { Calendar, Users, CheckCircle, ArrowRight, Sparkles } from "lucide-react";
 import type { Metadata } from "next";
 import { budouxify } from "@/lib/budoux";
 
@@ -148,6 +148,11 @@ export default function LandingPage() {
 						</p>
 						<nav aria-label="フッターナビゲーション">
 							<ul className="flex items-center gap-6 text-sm list-none m-0 p-0">
+								<li>
+									<Link href="/release-notes" className="text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+										<Sparkles className="h-3 w-3" /> リリースノート
+									</Link>
+								</li>
 								<li>
 									<Link href="/privacy" className="text-muted-foreground hover:text-foreground transition-colors">
 										プライバシーポリシー

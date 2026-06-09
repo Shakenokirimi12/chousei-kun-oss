@@ -112,19 +112,19 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                                         highlight && !confirmed ? "bg-primary/5 font-bold text-primary" : ""
                                     )}>
                                         <div className="flex flex-col items-center justify-center h-full py-1">
-                                            <span className="text-[10px] uppercase text-muted-foreground/70">
+                                            <span className="text-xs uppercase text-muted-foreground/70">
                                                 {date.toLocaleDateString('ja-JP', { weekday: 'short' })}
                                             </span>
                                             <span className="text-sm font-semibold leading-none my-0.5">
                                                 {date.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
                                             </span>
-                                            <span className="text-[10px] text-muted-foreground">
+                                            <span className="text-xs text-muted-foreground">
                                                 {period?.label}
                                             </span>
                                             {/* Highlight Badge */}
                                             {confirmed && (
                                                 <div className="absolute top-1 left-1">
-                                                    <span className="text-[10px] rounded bg-emerald-600 text-white px-1 py-0.5">確定</span>
+                                                    <span className="text-xs rounded bg-emerald-600 text-white px-1 py-0.5">確定</span>
                                                 </div>
                                             )}
                                             {highlight && !confirmed && (

@@ -51,6 +51,7 @@ export class CampusSquareService {
 
             const res1 = await fetch(`${portalUrl}/campusportal.do?locale=ja_JP`, {
                 headers: { 'User-Agent': this.UA },
+                signal: AbortSignal.timeout(15_000),
             });
             console.log('[CampusSquareService] res1 ok:', res1.ok, 'status:', res1.status);
 
@@ -89,6 +90,7 @@ export class CampusSquareService {
                     'Referer': `${portalUrl}/campusportal.do?locale=ja_JP`,
                     'Origin': origin
                 },
+                signal: AbortSignal.timeout(15_000),
             });
 
             // Update SID if changed (usually it is rotated after login)
@@ -102,6 +104,7 @@ export class CampusSquareService {
                     'Cookie': `JSESSIONID=${authenticatedSid}`,
                     'Referer': `${portalUrl}/campusportal.do`
                 },
+                signal: AbortSignal.timeout(15_000),
             });
             const buf3 = await res3.arrayBuffer();
             const mainHtml = decoder.decode(buf3);
@@ -123,6 +126,7 @@ export class CampusSquareService {
                     'Cookie': `JSESSIONID=${authenticatedSid}`,
                     'Referer': `${portalUrl}/campusportal.do?page=main`
                 },
+                signal: AbortSignal.timeout(15_000),
             });
             // Small delay just in case (though unnecessary in pure async fetch usually, mimicking behavior)
             await new Promise(r => setTimeout(r, 300));
@@ -137,6 +141,7 @@ export class CampusSquareService {
                     'Cookie': `JSESSIONID=${authenticatedSid}`,
                     'Referer': `${portalUrl}/campusportal.do?page=main&tabId=po`,
                 },
+                signal: AbortSignal.timeout(15_000),
             });
 
             const buf4 = await res4.arrayBuffer();
@@ -153,7 +158,8 @@ export class CampusSquareService {
             // Fetch ICS
             console.log('[CampusSquareService] Fetching ICS from:', calendarUrl);
             const icsRes = await fetch(calendarUrl, {
-                headers: { 'User-Agent': this.UA }
+                headers: { 'User-Agent': this.UA },
+                signal: AbortSignal.timeout(15_000),
             });
 
             if (!icsRes.ok) throw new Error(`カレンダーデータの取得に失敗しました (ステータス: ${icsRes.status})`);

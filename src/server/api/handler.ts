@@ -4,7 +4,7 @@ import { apiApp } from "@/server/api/app";
 export async function handleApiRequest(request: Request) {
     try {
         const { env } = await getCloudflareContext();
-        const response = await apiApp.fetch(request, { DB: env.DB });
+        const response = await apiApp.fetch(request, env);
         
         // Ensure proper cache headers for API responses
         if (!response.headers.has("Cache-Control")) {

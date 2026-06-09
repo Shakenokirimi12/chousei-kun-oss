@@ -1,5 +1,5 @@
 import type { InferSelectModel } from "drizzle-orm";
-import type { users, events, participants, availabilities, googleOauthSessions } from "@/server/db/schema";
+import type { users, events, participants, availabilities, googleOauthSessions, officeHours, officeHourBookings, officeHourHostBusy } from "@/server/db/schema";
 
 export type User = InferSelectModel<typeof users>;
 export type Event = InferSelectModel<typeof events>;
@@ -44,3 +44,8 @@ export type CandidateWindow = {
     startDateTime: string;
     endDateTime: string;
 };
+
+// --- Office Hour ---
+export type OfficeHour = InferSelectModel<typeof officeHours>;
+export type OfficeHourBooking = InferSelectModel<typeof officeHourBookings>;
+export type OfficeHourHostBusy = InferSelectModel<typeof officeHourHostBusy>;

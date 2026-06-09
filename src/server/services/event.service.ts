@@ -62,10 +62,23 @@ export class EventService {
         });
     }
 
-    async getAvailabilities(eventId: string): Promise<Availability[]> {
+    /**
+     * 公開ページ向けの参加者一覧。通知メール等のPIIを除外し、表示に必要な列のみ返す。
+     */
+    async getParticipantsPublic(eventId: string): Promise<Pick<Participant, "id" | "name" | "comment">[]> {
         return this.db
             .select({
-                id: availabilities.id,
+                id: participants.id,
+                name: participants.name,
+                comment: participants.comment,
+            })
+            .from(participants)
+            .where(eq(participants.eventId, eventId));
+    }
+
+    async getAvailabilities(eventId: string): Promise<Omit<Availability, "id">[]> {
+        return this.db
+            .select({
                 participantId: availabilities.participantId,
                 candidateIdx: availabilities.candidateIdx,
                 status: availabilities.status,
@@ -78,7 +91,7 @@ export class EventService {
     async getEventWithParticipantsAndAvailabilities(eventId: string) {
         const [event, participantList, availabilityList] = await Promise.all([
             this.findByIdPublic(eventId),
-            this.getParticipants(eventId),
+            this.getParticipantsPublic(eventId),
             this.getAvailabilities(eventId),
         ]);
 
