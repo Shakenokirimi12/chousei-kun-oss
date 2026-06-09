@@ -25,9 +25,30 @@ export type WeeklyWindow = {
 
 const JST_OFFSET_MIN = 9 * 60;
 
+/** 無期限指定時のデフォルト表示窓 (90日分) */
+export const OPEN_ENDED_DAYS = 90;
+
 function parseHm(hm: string): number {
     const [h, m] = hm.split(":").map(Number);
     return h * 60 + m;
+}
+
+/**
+ * null 許容の startDate/endDate から、実際に使う表示範囲（JST 0:00 ms）を決定する。
+ * - startDate が null なら「今日(JST)の 0:00」
+ * - endDate が null なら startDate + OPEN_ENDED_DAYS - 1 日
+ */
+export function resolveDateRange(opts: {
+    startDate: number | null;
+    endDate: number | null;
+    now?: number;
+}): { startDate: number; endDate: number } {
+    const now = opts.now ?? Date.now();
+    const todayParts = toJstParts(now);
+    const todayMs = jstDayStartMs(todayParts.year, todayParts.monthIndex, todayParts.day);
+    const startDate = opts.startDate ?? todayMs;
+    const endDate = opts.endDate ?? startDate + (OPEN_ENDED_DAYS - 1) * 24 * 60 * 60_000;
+    return { startDate, endDate };
 }
 
 /** JST の年月日（0:00）に対応する ms epoch を返す。 */

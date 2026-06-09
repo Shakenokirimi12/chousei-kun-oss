@@ -25,8 +25,8 @@ apiApp.post("/sync-calendar", sValidator("json", syncCalendarSchema), async (c) 
     }
 
     const { uid, pass } = c.req.valid("json");
-    const syncedEvents = await CampusSquareService.fetchCalendarEvents(uid, pass);
-    return c.json({ events: syncedEvents });
+    const result = await CampusSquareService.fetchCalendarWithUrl(uid, pass);
+    return c.json({ events: result.events, icalUrl: result.icalUrl });
 });
 
 apiApp.post("/sync-ical", sValidator("json", syncICalSchema), async (c) => {

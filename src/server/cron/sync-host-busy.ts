@@ -10,6 +10,7 @@
 import { createDb } from "@/server/db/client";
 import { createOfficeHourService } from "@/server/services/officeHour/officeHour.service";
 import { refreshGoogleTokenIfNeeded } from "@/server/api/utils";
+import { resolveDateRange } from "@/server/services/officeHour/slotGenerator";
 import { safeFetchText } from "@/lib/safe-fetch";
 import { parseICal } from "@/lib/ical";
 
@@ -73,8 +74,9 @@ export async function syncOneOfficeHour(env: Bindings, officeHourId: string): Pr
     const creds = await svc.getHostCredentials(officeHourId);
     if (!creds) return { ok: false, error: "office hour not found" };
 
-    const timeMin = new Date(creds.startDate).toISOString();
-    const timeMax = new Date(creds.endDate + 24 * 60 * 60 * 1000).toISOString();
+    const range = resolveDateRange({ startDate: creds.startDate, endDate: creds.endDate });
+    const timeMin = new Date(range.startDate).toISOString();
+    const timeMax = new Date(range.endDate + 24 * 60 * 60 * 1000).toISOString();
     const partialErrors: string[] = [];
 
     // Google
@@ -105,7 +107,7 @@ export async function syncOneOfficeHour(env: Bindings, officeHourId: string): Pr
             }))
             .filter((e) => !Number.isNaN(e.startMs) && !Number.isNaN(e.endMs))
             // 受付期間 + 1日のバッファに収める
-            .filter((e) => e.endMs >= creds.startDate && e.startMs <= creds.endDate + 24 * 60 * 60 * 1000);
+            .filter((e) => e.endMs >= range.startDate && e.startMs <= range.endDate + 24 * 60 * 60 * 1000);
         await svc.replaceHostBusy(officeHourId, "campus", mapped);
     } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);

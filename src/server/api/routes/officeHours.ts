@@ -3,13 +3,14 @@ import { sValidator } from "@hono/standard-validator";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { createDb } from "@/server/db/client";
-import { officeHours } from "@/server/db/schema";
+import { officeHours, officeHourBookings } from "@/server/db/schema";
 import { createOfficeHourService } from "@/server/services/officeHour/officeHour.service";
-import { generateSlots, isSlotBlockedByBusy, type WeeklyWindow } from "@/server/services/officeHour/slotGenerator";
+import { generateSlots, isSlotBlockedByBusy, resolveDateRange, type WeeklyWindow } from "@/server/services/officeHour/slotGenerator";
 import {
     createOfficeHourSchema,
     officeHourIdParamSchema,
     bookOfficeHourSchema,
+    updateOfficeHourSchema,
 } from "../schemas";
 import { parseCookieValue, refreshGoogleTokenIfNeeded } from "../utils";
 import { verifyPassword } from "@/lib/admin-auth";
@@ -18,6 +19,29 @@ import { COOKIE_NAMES } from "@/lib/constants";
 type Bindings = { DB: D1Database };
 
 export const officeHoursRoutes = new Hono<{ Bindings: Bindings }>();
+
+/**
+ * 自分が作成した Office Hour 一覧（Google セッション必須）。
+ */
+officeHoursRoutes.get("/mine", async (c) => {
+    const db = createDb(c.env.DB);
+    const cookieHeader = c.req.header("cookie") ?? "";
+    const googleSessionId = parseCookieValue(cookieHeader, COOKIE_NAMES.GOOGLE_SESSION);
+    if (!googleSessionId) {
+        return c.json({ items: [], authenticated: false });
+    }
+    const session = await refreshGoogleTokenIfNeeded(db, googleSessionId);
+    if (!session) {
+        return c.json({ items: [], authenticated: false });
+    }
+    if (!session.userId) {
+        return c.json({ items: [], authenticated: true, email: session.email, noUserId: true });
+    }
+
+    const svc = createOfficeHourService(db);
+    const items = await svc.listByHostUser(session.userId);
+    return c.json({ items, authenticated: true, email: session.email });
+});
 
 /**
  * 作成: 主催者は Google セッション必須。Campus 認証は body から受け取り、
@@ -38,15 +62,15 @@ officeHoursRoutes.post("/", sValidator("json", createOfficeHourSchema), async (c
         return c.json({ error: "Googleセッションが無効です。再連携してください" }, 400);
     }
     if (!session.userId) {
-        return c.json({ error: "ユーザー登録が完了していません" }, 400);
+        return c.json({ error: "ユーザー登録が完了していません。Googleアカウントを再連携してください。" }, 400);
     }
 
     const svc = createOfficeHourService(db);
     const { id, adminAccessToken } = await svc.create({
         title: body.title,
         description: body.description || undefined,
-        startDate: body.startDate,
-        endDate: body.endDate,
+        startDate: body.startDate ?? null,
+        endDate: body.endDate ?? null,
         windows: body.windows,
         slotDurationMin: body.slotDurationMin,
         capacityPerSlot: body.capacityPerSlot,
@@ -74,16 +98,24 @@ officeHoursRoutes.get("/:id", sValidator("param", officeHourIdParamSchema), asyn
     const svc = createOfficeHourService(db);
     const { id } = c.req.valid("param");
     const view = await svc.getPublicView(id);
-    if (!view) return c.json({ error: "Office Hour not found" }, 404);
+    if (!view) {
+        const deleted = await svc.isDeleted(id);
+        if (deleted) return c.json({ error: "この Office Hour は削除されました", deleted: true }, 410);
+        return c.json({ error: "Office Hour not found" }, 404);
+    }
 
     const [busy, slotBookings] = await Promise.all([
         svc.getHostBusy(id),
         svc.getSlotBookings(id),
     ]);
 
-    const slots = generateSlots({
+    const { startDate, endDate } = resolveDateRange({
         startDate: view.startDate,
         endDate: view.endDate,
+    });
+    const slots = generateSlots({
+        startDate,
+        endDate,
         windows: view.windows as WeeklyWindow[],
         slotDurationMin: view.slotDurationMin,
         bufferMin: view.bufferMin,
@@ -107,8 +139,11 @@ officeHoursRoutes.get("/:id", sValidator("param", officeHourIdParamSchema), asyn
             id: view.id,
             title: view.title,
             description: view.description,
+            // null=「今日から / 無期限」を維持しつつ、resolve 後の表示範囲も併せて返す
             startDate: view.startDate,
             endDate: view.endDate,
+            effectiveStartDate: startDate,
+            effectiveEndDate: endDate,
             slotDurationMin: view.slotDurationMin,
             capacityPerSlot: view.capacityPerSlot,
             lastSyncAt: view.lastSyncAt,
@@ -131,7 +166,7 @@ officeHoursRoutes.post(
         const body = c.req.valid("json");
 
         const oh = await svc.findById(id);
-        if (!oh) return c.json({ error: "Office Hour not found" }, 404);
+        if (!oh) return c.json({ error: "この Office Hour は削除されたか存在しません" }, 404);
 
         // 主催者の busy と重なっていないか再確認（クライアントが古い状態を持っている可能性に備える）
         const busy = await svc.getHostBusy(id);
@@ -153,7 +188,66 @@ officeHoursRoutes.post(
             if (r.reason === "slot_full") return c.json({ error: "この枠は満員です" }, 409);
             if (r.reason === "duplicate") return c.json({ error: "既にこの枠を予約済みです" }, 409);
         }
-        return c.json({ ok: true, bookingId: (r as { ok: true; bookingId: string }).bookingId });
+
+        const bookingId = (r as { ok: true; bookingId: string }).bookingId;
+
+        // Google カレンダーにイベントを自動作成（ホストのカレンダーに追加）
+        try {
+            const hostSession = await refreshGoogleTokenIfNeeded(db, oh.hostGoogleSessionId);
+            if (hostSession?.accessToken) {
+                const slotStartDate = new Date(body.slotStart);
+                const slotEndDate = new Date(slotEnd);
+                const startIso = toJstIso(slotStartDate);
+                const endIso = toJstIso(slotEndDate);
+
+                const attendees: { email: string; displayName?: string }[] = [];
+                if (body.email) {
+                    attendees.push({ email: body.email, displayName: body.name });
+                }
+
+                const description = [
+                    `予約者: ${body.name}`,
+                    body.email ? `メール: ${body.email}` : null,
+                    body.comment ? `コメント: ${body.comment}` : null,
+                    `\n調整くん Office Hour で自動作成されました。`,
+                ].filter(Boolean).join("\n");
+
+                const calRes = await fetch(
+                    `https://www.googleapis.com/calendar/v3/calendars/primary/events${attendees.length > 0 ? "?sendUpdates=all" : ""}`,
+                    {
+                        method: "POST",
+                        headers: {
+                            Authorization: `Bearer ${hostSession.accessToken}`,
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            summary: `${oh.title} - ${body.name}`,
+                            description,
+                            start: { dateTime: startIso, timeZone: "Asia/Tokyo" },
+                            end: { dateTime: endIso, timeZone: "Asia/Tokyo" },
+                            attendees,
+                        }),
+                        signal: AbortSignal.timeout(10_000),
+                    }
+                );
+
+                if (calRes.ok) {
+                    const calEvent = await calRes.json() as { id?: string };
+                    if (calEvent.id) {
+                        await db
+                            .update(officeHourBookings)
+                            .set({ googleCalendarEventId: calEvent.id })
+                            .where(eq(officeHourBookings.id, bookingId));
+                    }
+                } else {
+                    console.error("[office-hour/book] Google Calendar event creation failed:", calRes.status, await calRes.text().catch(() => ""));
+                }
+            }
+        } catch (e) {
+            console.error("[office-hour/book] Failed to create Google Calendar event:", e);
+        }
+
+        return c.json({ ok: true, bookingId });
     }
 );
 
@@ -181,6 +275,31 @@ officeHoursRoutes.post(
     }
 );
 
+/** 管理者: Office Hour を論理削除。 */
+officeHoursRoutes.delete(
+    "/:id",
+    sValidator("param", officeHourIdParamSchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id } = c.req.valid("param");
+        const cookieHeader = c.req.header("cookie") ?? "";
+        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
+        const token = match?.[1];
+        const row = await db.query.officeHours.findFirst({
+            where: eq(officeHours.id, id),
+            columns: { adminAccessToken: true, deletedAt: true },
+        });
+        if (!row) return c.json({ error: "Office Hour not found" }, 404);
+        if (row.deletedAt) return c.json({ error: "既に削除されています" }, 410);
+        if (!token || token !== row.adminAccessToken) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+        const svc = createOfficeHourService(db);
+        await svc.softDelete(id);
+        return c.json({ ok: true });
+    }
+);
+
 /** 管理者: 予約一覧（既存パターンと同様、admin cookie 必須）。 */
 officeHoursRoutes.get(
     "/:id/admin/bookings",
@@ -194,7 +313,7 @@ officeHoursRoutes.get(
         const token = match?.[1];
         const row = await db.query.officeHours.findFirst({
             where: eq(officeHours.id, id),
-            columns: { adminAccessToken: true },
+            columns: { adminAccessToken: true, title: true, deletedAt: true },
         });
         if (!row) return c.json({ error: "Office Hour not found" }, 404);
         if (!token || token !== row.adminAccessToken) {
@@ -203,6 +322,87 @@ officeHoursRoutes.get(
 
         const svc = createOfficeHourService(db);
         const bookings = await svc.listBookingsForAdmin(id);
-        return c.json({ bookings });
+        return c.json({ title: row.title, bookings, deleted: row.deletedAt !== null });
     }
 );
+
+/** 管理者: Office Hour の設定取得。 */
+officeHoursRoutes.get(
+    "/:id/admin/settings",
+    sValidator("param", officeHourIdParamSchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id } = c.req.valid("param");
+        const cookieHeader = c.req.header("cookie") ?? "";
+        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
+        const token = match?.[1];
+        const row = await db.query.officeHours.findFirst({
+            where: eq(officeHours.id, id),
+            columns: {
+                adminAccessToken: true,
+                title: true,
+                description: true,
+                startDate: true,
+                endDate: true,
+                windows: true,
+                slotDurationMin: true,
+                capacityPerSlot: true,
+                bufferMin: true,
+                deletedAt: true,
+            },
+        });
+        if (!row) return c.json({ error: "Office Hour not found" }, 404);
+        if (!token || token !== row.adminAccessToken) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+        return c.json({
+            title: row.title,
+            description: row.description,
+            startDate: row.startDate,
+            endDate: row.endDate,
+            windows: JSON.parse(row.windows),
+            slotDurationMin: row.slotDurationMin,
+            capacityPerSlot: row.capacityPerSlot,
+            bufferMin: row.bufferMin,
+            deleted: row.deletedAt !== null,
+        });
+    }
+);
+
+/** 管理者: Office Hour の時間枠を更新。 */
+officeHoursRoutes.patch(
+    "/:id",
+    sValidator("param", officeHourIdParamSchema),
+    sValidator("json", updateOfficeHourSchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id } = c.req.valid("param");
+        const body = c.req.valid("json");
+        const cookieHeader = c.req.header("cookie") ?? "";
+        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
+        const token = match?.[1];
+        const row = await db.query.officeHours.findFirst({
+            where: eq(officeHours.id, id),
+            columns: { adminAccessToken: true, deletedAt: true },
+        });
+        if (!row) return c.json({ error: "Office Hour not found" }, 404);
+        if (row.deletedAt) return c.json({ error: "この Office Hour は削除されています" }, 410);
+        if (!token || token !== row.adminAccessToken) {
+            return c.json({ error: "Unauthorized" }, 401);
+        }
+        const svc = createOfficeHourService(db);
+        await svc.updateSettings(id, body);
+        return c.json({ ok: true });
+    }
+);
+
+function toJstIso(date: Date): string {
+    const jst = new Date(date.getTime() + 9 * 60 * 60_000);
+    const y = jst.getUTCFullYear();
+    const mo = String(jst.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(jst.getUTCDate()).padStart(2, "0");
+    const h = String(jst.getUTCHours()).padStart(2, "0");
+    const mi = String(jst.getUTCMinutes()).padStart(2, "0");
+    const s = String(jst.getUTCSeconds()).padStart(2, "0");
+    return `${y}-${mo}-${d}T${h}:${mi}:${s}+09:00`;
+}

@@ -84,16 +84,18 @@ export const updateNotificationSchema = z.object({
 
 export const googleStartQuerySchema = z.object({
     returnTo: z.string().max(512).optional().default("/"),
+    userId: z.string().uuid().optional(),
 });
 
 // --- Office Hour ---
 
 const HM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const HM_END_RE = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
 
 export const weeklyWindowSchema = z.object({
     day: z.number().int().min(0).max(6),
     start: z.string().regex(HM_RE),
-    end: z.string().regex(HM_RE),
+    end: z.string().regex(HM_END_RE),
 }).refine((w) => {
     const [sh, sm] = w.start.split(":").map(Number);
     const [eh, em] = w.end.split(":").map(Number);
@@ -103,8 +105,9 @@ export const weeklyWindowSchema = z.object({
 export const createOfficeHourSchema = z.object({
     title: z.string().trim().min(1).max(200),
     description: z.string().max(2000).optional().default(""),
-    startDate: z.number().int(),               // JST 0:00 ms
-    endDate: z.number().int(),                 // JST 0:00 ms (inclusive)
+    // 受付期間は任意。NULL の場合は startDate=今日 / endDate=無期限 として扱う。
+    startDate: z.number().int().nullable().optional(),
+    endDate: z.number().int().nullable().optional(),
     windows: z.array(weeklyWindowSchema).min(1).max(50),
     slotDurationMin: z.number().int().min(5).max(8 * 60),
     capacityPerSlot: z.number().int().min(1).max(100),
@@ -112,10 +115,24 @@ export const createOfficeHourSchema = z.object({
     adminPassword: z.string().min(8).max(256),
     // 大学カレンダー(iCal URL)。必須。
     icalUrl: z.string().url().max(2048),
-}).refine((v) => v.endDate >= v.startDate, "endDate must be >= startDate");
+}).refine(
+    (v) => v.startDate == null || v.endDate == null || v.endDate >= v.startDate,
+    "endDate must be >= startDate"
+);
 
 export const officeHourIdParamSchema = z.object({
     id: z.string().uuid(),
+});
+
+export const updateOfficeHourSchema = z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    description: z.string().max(2000).optional(),
+    startDate: z.number().int().nullable().optional(),
+    endDate: z.number().int().nullable().optional(),
+    windows: z.array(weeklyWindowSchema).min(1).max(50).optional(),
+    slotDurationMin: z.number().int().min(5).max(8 * 60).optional(),
+    capacityPerSlot: z.number().int().min(1).max(100).optional(),
+    bufferMin: z.number().int().min(0).max(120).optional(),
 });
 
 export const bookOfficeHourSchema = z.object({

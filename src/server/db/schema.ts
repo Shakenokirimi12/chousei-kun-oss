@@ -59,8 +59,8 @@ export const officeHours = sqliteTable("office_hours", {
     id: text("id").primaryKey(),
     title: text("title").notNull(),
     description: text("description"),
-    startDate: integer("start_date").notNull(),
-    endDate: integer("end_date").notNull(),
+    startDate: integer("start_date"),           // NULL = 「今日から」
+    endDate: integer("end_date"),               // NULL = 「無期限」
     windows: text("windows").notNull(),                 // JSON
     slotDurationMin: integer("slot_duration_min").notNull(),
     capacityPerSlot: integer("capacity_per_slot").notNull().default(1),
@@ -74,6 +74,7 @@ export const officeHours = sqliteTable("office_hours", {
     hostIcalUrl: text("host_ical_url").notNull(),
     lastSyncAt: integer("last_sync_at"),
     lastSyncError: text("last_sync_error"),
+    deletedAt: integer("deleted_at"),
     createdAt: integer("created_at").notNull(),
 });
 
@@ -88,6 +89,7 @@ export const officeHourBookings = sqliteTable("office_hour_bookings", {
     comment: text("comment"),
     email: text("email"),
     userId: text("user_id"),
+    googleCalendarEventId: text("google_calendar_event_id"),
     createdAt: integer("created_at").notNull(),
 });
 

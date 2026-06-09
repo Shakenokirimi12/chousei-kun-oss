@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { siteConfig } from "@/config/site";
-import { Calendar, Users, CheckCircle, ArrowRight, Sparkles } from "lucide-react";
+import { Calendar, Users, CheckCircle, ArrowRight, Sparkles, Clock } from "lucide-react";
 import type { Metadata } from "next";
 import { budouxify } from "@/lib/budoux";
 
@@ -37,7 +37,7 @@ export default function LandingPage() {
 			{/* Main Content */}
 			<main className="flex-1">
 				{/* Hero Section */}
-				<section className="max-w-5xl mx-auto px-4 py-16 sm:py-24" aria-labelledby="hero-title">
+				<section className="max-w-5xl mx-auto px-4 py-10 sm:py-14" aria-labelledby="hero-title">
 					<div className="text-center space-y-6">
 						<h1 id="hero-title" className="text-4xl sm:text-5xl font-extrabold tracking-tight">
 							{siteConfig.name}
@@ -45,10 +45,10 @@ export default function LandingPage() {
 						<p className="text-xl sm:text-2xl text-muted-foreground max-w-2xl mx-auto" style={{ wordBreak: "keep-all", overflowWrap: "anywhere" }}>
 							{budouxify("イベントの日程候補を作成し、参加者の出欠を集計して最適な日程を決めるためのスケジュール調整アプリです。")}
 						</p>
-						<div className="pt-4">
-							<Link href="/create">
-								<Button size="lg" className="text-lg px-8 py-6 gap-2">
-									{budouxify("予定調整を始める")}
+						<div className="pt-4 flex flex-col sm:flex-row gap-3 justify-center items-stretch sm:items-center">
+							<Link href="/create" className="w-full sm:w-auto">
+								<Button size="lg" className="text-lg px-8 py-6 gap-2 w-full sm:w-auto">
+									予定調整を始める
 									<ArrowRight className="h-5 w-5" aria-hidden="true" />
 								</Button>
 							</Link>
@@ -57,7 +57,7 @@ export default function LandingPage() {
 				</section>
 
 				{/* Features Section */}
-				<section className="max-w-5xl mx-auto px-4 py-12" aria-labelledby="features-title">
+				<section className="max-w-5xl mx-auto px-4 pb-8 sm:pb-12" aria-labelledby="features-title">
 					<h2 id="features-title" className="sr-only">主な機能</h2>
 					<ul className="grid sm:grid-cols-3 gap-8 list-none m-0 p-0">
 						<li className="text-center space-y-3 p-6 rounded-lg border bg-card/50">

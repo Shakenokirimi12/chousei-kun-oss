@@ -38,6 +38,7 @@ export type GoogleSessionStatus = {
     email: string | null;
     hasCalendarReadScope: boolean;
     hasCalendarWriteScope: boolean;
+    hasUserId: boolean;
 };
 
 export type CandidateWindow = {

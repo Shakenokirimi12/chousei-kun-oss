@@ -39,6 +39,11 @@ export class CampusSquareService {
     }
 
     static async fetchCalendarEvents(uid: string, pass: string): Promise<CalendarEvent[]> {
+        const result = await this.fetchCalendarWithUrl(uid, pass);
+        return result.events;
+    }
+
+    static async fetchCalendarWithUrl(uid: string, pass: string): Promise<{ events: CalendarEvent[]; icalUrl: string }> {
         let lastSid = "None"; // For debugging context if needed
 
         try {
@@ -166,7 +171,7 @@ export class CampusSquareService {
             // ICS is usually UTF-8 or compatible ASCII, but let's be safe
             const icsText = await icsRes.text();
 
-            return this.parseICS(icsText);
+            return { events: this.parseICS(icsText), icalUrl: calendarUrl };
 
         } catch (error) {
             console.error('[CampusSquareService] Error:', error);

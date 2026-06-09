@@ -1,4 +1,4 @@
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { DbClient } from "@/server/db/client";
 import {
     officeHours,
@@ -12,8 +12,8 @@ import { encryptToken, decryptToken } from "@/lib/token-crypto";
 export interface CreateOfficeHourInput {
     title: string;
     description?: string;
-    startDate: number;          // JST 0:00 ms
-    endDate: number;            // JST 0:00 ms（当日含む）
+    startDate: number | null;   // JST 0:00 ms。null は「今日から」
+    endDate: number | null;     // JST 0:00 ms（当日含む）。null は「無期限」
     windows: WeeklyWindow[];
     slotDurationMin: number;
     capacityPerSlot: number;
@@ -62,9 +62,51 @@ export class OfficeHourService {
 
     async findById(id: string) {
         const row = await this.db.query.officeHours.findFirst({
-            where: eq(officeHours.id, id),
+            where: and(eq(officeHours.id, id), isNull(officeHours.deletedAt)),
         });
         return row ?? null;
+    }
+
+    async isDeleted(id: string): Promise<boolean> {
+        const row = await this.db.query.officeHours.findFirst({
+            where: eq(officeHours.id, id),
+            columns: { deletedAt: true },
+        });
+        if (!row) return false;
+        return row.deletedAt !== null;
+    }
+
+    async updateSettings(id: string, patch: {
+        title?: string;
+        description?: string;
+        startDate?: number | null;
+        endDate?: number | null;
+        windows?: { day: number; start: string; end: string }[];
+        slotDurationMin?: number;
+        capacityPerSlot?: number;
+        bufferMin?: number;
+    }): Promise<void> {
+        const set: Record<string, unknown> = {};
+        if (patch.title !== undefined) set.title = patch.title;
+        if (patch.description !== undefined) set.description = patch.description;
+        if (patch.startDate !== undefined) set.startDate = patch.startDate;
+        if (patch.endDate !== undefined) set.endDate = patch.endDate;
+        if (patch.windows !== undefined) set.windows = JSON.stringify(patch.windows);
+        if (patch.slotDurationMin !== undefined) set.slotDurationMin = patch.slotDurationMin;
+        if (patch.capacityPerSlot !== undefined) set.capacityPerSlot = patch.capacityPerSlot;
+        if (patch.bufferMin !== undefined) set.bufferMin = patch.bufferMin;
+        if (Object.keys(set).length === 0) return;
+        await this.db
+            .update(officeHours)
+            .set(set)
+            .where(and(eq(officeHours.id, id), isNull(officeHours.deletedAt)));
+    }
+
+    async softDelete(id: string): Promise<void> {
+        await this.db
+            .update(officeHours)
+            .set({ deletedAt: Date.now() })
+            .where(and(eq(officeHours.id, id), isNull(officeHours.deletedAt)));
     }
 
     /**
@@ -84,18 +126,39 @@ export class OfficeHourService {
         };
     }
 
-    /** Cron 対象: 受付終了日が未来の全 Office Hour を返す。 */
-    async listActive(): Promise<{ id: string }[]> {
+    async listByHostUser(hostUserId: string) {
         return this.db
-            .select({ id: officeHours.id })
+            .select({
+                id: officeHours.id,
+                title: officeHours.title,
+                description: officeHours.description,
+                startDate: officeHours.startDate,
+                endDate: officeHours.endDate,
+                slotDurationMin: officeHours.slotDurationMin,
+                capacityPerSlot: officeHours.capacityPerSlot,
+                lastSyncAt: officeHours.lastSyncAt,
+                createdAt: officeHours.createdAt,
+            })
             .from(officeHours)
-            .where(gte(officeHours.endDate, Date.now()));
+            .where(and(eq(officeHours.hostUserId, hostUserId), isNull(officeHours.deletedAt)));
+    }
+
+    /** Cron 対象: 受付終了日が未来 or 無期限の全 Office Hour を返す。 */
+    async listActive(): Promise<{ id: string }[]> {
+        const rows = await this.db
+            .select({ id: officeHours.id, endDate: officeHours.endDate })
+            .from(officeHours)
+            .where(isNull(officeHours.deletedAt));
+        const now = Date.now();
+        return rows
+            .filter((r) => r.endDate === null || r.endDate >= now)
+            .map((r) => ({ id: r.id }));
     }
 
     /** 公開ページ用ビュー: PII を含まないメタ情報のみ。 */
     async getPublicView(id: string) {
         const row = await this.db.query.officeHours.findFirst({
-            where: eq(officeHours.id, id),
+            where: and(eq(officeHours.id, id), isNull(officeHours.deletedAt)),
             columns: {
                 id: true,
                 title: true,

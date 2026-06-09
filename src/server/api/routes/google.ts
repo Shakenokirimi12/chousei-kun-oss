@@ -17,6 +17,7 @@ import {
     GOOGLE_CALENDAR_WRITE_SCOPE,
 } from "../utils";
 import { encryptToken } from "@/lib/token-crypto";
+import { createUserService } from "@/server/services/user.service";
 
 type Bindings = {
     DB: D1Database;
@@ -27,9 +28,9 @@ export const googleRoutes = new Hono<{ Bindings: Bindings }>();
 googleRoutes.get("/auth/start", sValidator("query", googleStartQuerySchema), async (c) => {
     const clientId = getEnvOrThrow("GOOGLE_CLIENT_ID");
     const redirectUri = getEnvOrThrow("GOOGLE_REDIRECT_URI");
-    const { returnTo } = c.req.valid("query");
+    const { returnTo, userId } = c.req.valid("query");
     const nonce = crypto.randomUUID();
-    const state = encodeState({ nonce, returnTo });
+    const state = encodeState({ nonce, returnTo, userId });
 
     const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     authUrl.searchParams.set("client_id", clientId);
@@ -55,7 +56,7 @@ googleRoutes.get("/auth/callback", async (c) => {
 
     const cookieHeader = c.req.header("cookie") ?? "";
     const nonceFromCookie = parseCookieValue(cookieHeader, "chousei_google_oauth_nonce");
-    const decoded = decodeState<{ nonce: string; returnTo?: string }>(state);
+    const decoded = decodeState<{ nonce: string; returnTo?: string; userId?: string }>(state);
     if (!nonceFromCookie || decoded.nonce !== nonceFromCookie) {
         return c.json({ error: "Invalid OAuth state" }, 400);
     }
@@ -91,8 +92,18 @@ googleRoutes.get("/auth/callback", async (c) => {
     const sessionId = crypto.randomUUID();
     const now = Date.now();
     const expiresAt = Math.floor(now / 1000) + tokenJson.expires_in;
+
+    // userId が state 経由で来ていればそのユーザーを getOrCreate
+    let resolvedUserId: string | null = null;
+    if (decoded.userId) {
+        const userService = createUserService(db);
+        const user = await userService.getOrCreate(decoded.userId);
+        resolvedUserId = user.id;
+    }
+
     await db.insert(googleOauthSessions).values({
         sessionId,
+        userId: resolvedUserId,
         email: userInfo.email,
         accessToken: (await encryptToken(tokenJson.access_token))!,
         refreshToken: await encryptToken(tokenJson.refresh_token ?? null),
@@ -185,6 +196,7 @@ googleRoutes.get("/session-status", async (c) => {
             email: null,
             hasCalendarReadScope: false,
             hasCalendarWriteScope: false,
+            hasUserId: false,
         });
     }
 
@@ -196,6 +208,7 @@ googleRoutes.get("/session-status", async (c) => {
             email: null,
             hasCalendarReadScope: false,
             hasCalendarWriteScope: false,
+            hasUserId: false,
         });
     }
 
@@ -204,6 +217,7 @@ googleRoutes.get("/session-status", async (c) => {
         email: session.email,
         hasCalendarReadScope: scopes.includes(GOOGLE_CALENDAR_READ_SCOPE),
         hasCalendarWriteScope: scopes.includes(GOOGLE_CALENDAR_WRITE_SCOPE),
+        hasUserId: !!session.userId,
     });
 });
 
