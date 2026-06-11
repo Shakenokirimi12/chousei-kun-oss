@@ -4,9 +4,8 @@ import * as React from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Download, Lock, AlertCircle, Calendar, Link2, Check, Trash2, Plus, X, Settings, ChevronDown, ChevronUp } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { formatDateLabel, formatTime, WEEKDAYS_JP } from "@/lib/officeHour";
+import { Loader2, Download, Lock, AlertCircle, Calendar, Link2, Check, Trash2, Settings } from "lucide-react";
+import { formatDateLabel, formatTime } from "@/lib/officeHour";
 
 type Booking = {
     id: string;
@@ -19,36 +18,6 @@ type Booking = {
     createdAt: number;
 };
 
-type TimeRange = { start: string; end: string };
-type DayConfig = { enabled: boolean; ranges: TimeRange[] };
-type WeeklyWindow = { day: number; start: string; end: string };
-
-const DEFAULT_RANGE: TimeRange = { start: "13:00", end: "17:00" };
-
-function windowsToDays(windows: WeeklyWindow[]): DayConfig[] {
-    const days: DayConfig[] = Array.from({ length: 7 }, () => ({ enabled: false, ranges: [{ ...DEFAULT_RANGE }] }));
-    for (const w of windows) {
-        if (w.day < 0 || w.day > 6) continue;
-        if (!days[w.day].enabled) {
-            days[w.day].enabled = true;
-            days[w.day].ranges = [{ start: w.start, end: w.end }];
-        } else {
-            days[w.day].ranges.push({ start: w.start, end: w.end });
-        }
-    }
-    return days;
-}
-
-function daysToWindows(days: DayConfig[]): WeeklyWindow[] {
-    const windows: WeeklyWindow[] = [];
-    for (let i = 0; i < days.length; i++) {
-        if (!days[i].enabled) continue;
-        for (const r of days[i].ranges) {
-            windows.push({ day: i, start: r.start, end: r.end });
-        }
-    }
-    return windows;
-}
 
 export function OfficeHourAdminView({ id }: { id: string }) {
     const [authorized, setAuthorized] = React.useState<boolean | null>(null);
@@ -67,12 +36,6 @@ export function OfficeHourAdminView({ id }: { id: string }) {
     const [isDeleting, setIsDeleting] = React.useState(false);
     const [confirmDelete, setConfirmDelete] = React.useState(false);
 
-    // 時間枠編集
-    const [showSettings, setShowSettings] = React.useState(false);
-    const [days, setDays] = React.useState<DayConfig[]>([]);
-    const [isSavingWindows, setIsSavingWindows] = React.useState(false);
-    const [windowsError, setWindowsError] = React.useState<string | null>(null);
-    const [windowsSaved, setWindowsSaved] = React.useState(false);
 
     const load = React.useCallback(async () => {
         setIsLoading(true);
@@ -103,24 +66,9 @@ export function OfficeHourAdminView({ id }: { id: string }) {
         }
     }, [id]);
 
-    const loadSettings = React.useCallback(async () => {
-        try {
-            const res = await fetch(`/api/office-hours/${id}/admin/settings`);
-            if (!res.ok) return;
-            const data = (await res.json()) as { windows: WeeklyWindow[] };
-            setDays(windowsToDays(data.windows));
-        } catch (e) {
-            console.error(e);
-        }
-    }, [id]);
-
     React.useEffect(() => {
         load();
     }, [load]);
-
-    React.useEffect(() => {
-        if (authorized) loadSettings();
-    }, [authorized, loadSettings]);
 
     const submitAuth = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -207,73 +155,6 @@ export function OfficeHourAdminView({ id }: { id: string }) {
         }
     };
 
-    // 時間枠編集ヘルパー
-    const updateDay = (i: number, patch: Partial<DayConfig>) => {
-        setDays((prev) => prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
-    };
-
-    const updateRange = (dayIdx: number, rangeIdx: number, patch: Partial<TimeRange>) => {
-        setDays((prev) =>
-            prev.map((d, di) =>
-                di === dayIdx
-                    ? { ...d, ranges: d.ranges.map((r, ri) => (ri === rangeIdx ? { ...r, ...patch } : r)) }
-                    : d
-            )
-        );
-    };
-
-    const addRange = (dayIdx: number) => {
-        setDays((prev) =>
-            prev.map((d, di) =>
-                di === dayIdx ? { ...d, ranges: [...d.ranges, { ...DEFAULT_RANGE }] } : d
-            )
-        );
-    };
-
-    const removeRange = (dayIdx: number, rangeIdx: number) => {
-        setDays((prev) =>
-            prev.map((d, di) =>
-                di === dayIdx ? { ...d, ranges: d.ranges.filter((_, ri) => ri !== rangeIdx) } : d
-            )
-        );
-    };
-
-    const saveWindows = async () => {
-        const windows = daysToWindows(days);
-        if (windows.length === 0) {
-            setWindowsError("少なくとも1つ以上の曜日と時間帯を設定してください");
-            return;
-        }
-        for (const w of windows) {
-            const [sh, sm] = w.start.split(":").map(Number);
-            const [eh, em] = w.end.split(":").map(Number);
-            if (eh * 60 + em <= sh * 60 + sm) {
-                setWindowsError(`${WEEKDAYS_JP[w.day]}曜日の時間帯が不正です（開始 < 終了 にしてください）`);
-                return;
-            }
-        }
-
-        setIsSavingWindows(true);
-        setWindowsError(null);
-        try {
-            const res = await fetch(`/api/office-hours/${id}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ windows }),
-            });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({})) as { error?: string };
-                setWindowsError(data.error ?? "保存に失敗しました");
-                return;
-            }
-            setWindowsSaved(true);
-            setTimeout(() => setWindowsSaved(false), 2000);
-        } catch {
-            setWindowsError("通信エラーが発生しました");
-        } finally {
-            setIsSavingWindows(false);
-        }
-    };
 
     if (notFound) {
         return (
@@ -357,20 +238,13 @@ export function OfficeHourAdminView({ id }: { id: string }) {
                 <Button variant="outline" size="sm" onClick={downloadCsv} disabled={bookings.length === 0} className="gap-2">
                     <Download className="h-4 w-4" /> CSVダウンロード
                 </Button>
-                {/*
                 {!isDeleted && (
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowSettings((p) => !p)}
-                        className="gap-2"
-                    >
-                        <Settings className="h-4 w-4" />
-                        時間枠を編集
-                        {showSettings ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    <Button variant="outline" size="sm" asChild className="gap-2">
+                        <Link href={`/office-hours/${id}/edit`}>
+                            <Settings className="h-4 w-4" /> 設定を編集
+                        </Link>
                     </Button>
                 )}
-                */}
                 {!isDeleted && !confirmDelete && (
                     <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(true)} className="gap-2 text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto">
                         <Trash2 className="h-4 w-4" /> 削除
@@ -390,97 +264,6 @@ export function OfficeHourAdminView({ id }: { id: string }) {
                 )}
             </div>
 
-            {/* 時間枠編集パネル */}
-            {showSettings && days.length > 0 && (
-                <div className="rounded-lg border bg-card/30 p-4 space-y-3">
-                    <h2 className="font-semibold flex items-center gap-2">
-                        <Settings className="h-4 w-4" /> 受付時間帯（曜日別）
-                    </h2>
-                    <p className="text-xs text-muted-foreground">曜日を ON/OFF にして、時間帯を指定してください。変更後は「保存」を押してください。</p>
-                    <div className="space-y-2">
-                        {days.map((d, i) => (
-                            <div
-                                key={i}
-                                className={cn(
-                                    "rounded-md border px-3 py-2 transition-colors",
-                                    d.enabled ? "bg-card/40" : "bg-card/10 opacity-70"
-                                )}
-                            >
-                                <div className="flex items-center gap-2">
-                                    <label className="flex items-center gap-2 min-w-[64px] cursor-pointer select-none">
-                                        <input
-                                            type="checkbox"
-                                            checked={d.enabled}
-                                            onChange={(e) => updateDay(i, { enabled: e.target.checked })}
-                                            className="h-4 w-4 accent-primary"
-                                        />
-                                        <span className="font-medium">{WEEKDAYS_JP[i]}</span>
-                                    </label>
-                                </div>
-                                {d.enabled && (
-                                    <div className="mt-2 ml-8 space-y-1.5">
-                                        {d.ranges.map((r, ri) => (
-                                            <div key={ri} className="flex items-center gap-2">
-                                                <Input
-                                                    type="time"
-                                                    value={r.start}
-                                                    onChange={(e) => updateRange(i, ri, { start: e.target.value })}
-                                                    className="w-28"
-                                                />
-                                                <span className="text-muted-foreground">〜</span>
-                                                <Input
-                                                    type="time"
-                                                    value={r.end === "24:00" ? "00:00" : r.end}
-                                                    onChange={(e) => {
-                                                        const v = e.target.value;
-                                                        updateRange(i, ri, { end: v === "00:00" ? "24:00" : v });
-                                                    }}
-                                                    className="w-28"
-                                                />
-                                                {r.end === "24:00" && (
-                                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">= 24:00</span>
-                                                )}
-                                                {d.ranges.length > 1 && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => removeRange(i, ri)}
-                                                        className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                                                    >
-                                                        <X className="h-3.5 w-3.5" />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                        <button
-                                            type="button"
-                                            onClick={() => addRange(i)}
-                                            className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors mt-1"
-                                        >
-                                            <Plus className="h-3 w-3" /> 時間帯を追加
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                    {windowsError && (
-                        <div role="alert" className="text-sm text-destructive flex items-start gap-2">
-                            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" /> {windowsError}
-                        </div>
-                    )}
-                    <div className="flex items-center gap-3">
-                        <Button onClick={saveWindows} disabled={isSavingWindows} size="sm" className="gap-1.5">
-                            {isSavingWindows && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                            保存
-                        </Button>
-                        {windowsSaved && (
-                            <span className="text-sm text-green-500 flex items-center gap-1">
-                                <Check className="h-4 w-4" /> 保存しました
-                            </span>
-                        )}
-                    </div>
-                </div>
-            )}
 
             {grouped.length === 0 ? (
                 <div className="rounded-lg border border-dashed p-8 text-center">

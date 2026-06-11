@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, Calendar as CalendarIcon, Sparkles, AlertCircle, Eye, Plus, X, GraduationCap, CheckCircle2, Copy, Check, ExternalLink, Link2 } from "lucide-react";
+import { Loader2, Calendar as CalendarIcon, Sparkles, AlertCircle, Plus, X, GraduationCap, CheckCircle2, Copy, Check, ExternalLink, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { WEEKDAYS_JP, parseDateInput, formatIsoDate } from "@/lib/officeHour";
 import type { GoogleSessionStatus } from "@/types";
@@ -22,7 +22,6 @@ type DayConfig = {
 };
 
 const DEFAULT_RANGE: TimeRange = { start: "13:00", end: "17:00" };
-const DEFAULT_DAY: DayConfig = { enabled: false, ranges: [{ ...DEFAULT_RANGE }] };
 const CACHE_KEY = "officeHourCreationCache";
 
 export type EditData = {
@@ -212,15 +211,20 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
         }
     };
 
-    const canSubmit =
-        googleStatus?.hasSession === true &&
-        title.trim().length > 0 &&
-        (openEnded || (startDate && endDate)) &&
-        days.some((d) => d.enabled) &&
-        slotDurationMin >= 5 &&
-        capacityPerSlot >= 1 &&
-        campusIcalUrl !== null &&
-        adminPassword.length >= 8;
+    const canSubmit = isEdit
+        ? title.trim().length > 0 &&
+          (openEnded || (startDate && endDate)) &&
+          days.some((d) => d.enabled) &&
+          slotDurationMin >= 5 &&
+          capacityPerSlot >= 1
+        : googleStatus?.hasSession === true &&
+          title.trim().length > 0 &&
+          (openEnded || (startDate && endDate)) &&
+          days.some((d) => d.enabled) &&
+          slotDurationMin >= 5 &&
+          capacityPerSlot >= 1 &&
+          campusIcalUrl !== null &&
+          adminPassword.length >= 8;
 
     const windowsForPreview = React.useMemo(
         () => days.flatMap((d, idx) =>
@@ -271,30 +275,54 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
 
         setIsSubmitting(true);
         try {
-            const res = await fetch("/api/office-hours", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    title: title.trim(),
-                    description: description.trim() || undefined,
-                    startDate: openEnded ? null : startMs,
-                    endDate: openEnded ? null : endMs,
-                    windows,
-                    slotDurationMin,
-                    capacityPerSlot,
-                    bufferMin,
-                    icalUrl: campusIcalUrl!,
-                    adminPassword,
-                }),
-            });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({})) as { error?: string };
-                setError(data.error ?? "作成に失敗しました");
-                return;
+            if (isEdit) {
+                const res = await fetch(`/api/office-hours/${editData!.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        title: title.trim(),
+                        description: description.trim() || undefined,
+                        startDate: openEnded ? null : startMs,
+                        endDate: openEnded ? null : endMs,
+                        windows,
+                        slotDurationMin,
+                        capacityPerSlot,
+                        bufferMin,
+                    }),
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({})) as { error?: string };
+                    setError(data.error ?? "保存に失敗しました");
+                    return;
+                }
+                setEditSaved(true);
+                setTimeout(() => setEditSaved(false), 3000);
+            } else {
+                const res = await fetch("/api/office-hours", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        title: title.trim(),
+                        description: description.trim() || undefined,
+                        startDate: openEnded ? null : startMs,
+                        endDate: openEnded ? null : endMs,
+                        windows,
+                        slotDurationMin,
+                        capacityPerSlot,
+                        bufferMin,
+                        icalUrl: campusIcalUrl!,
+                        adminPassword,
+                    }),
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({})) as { error?: string };
+                    setError(data.error ?? "作成に失敗しました");
+                    return;
+                }
+                const data = (await res.json()) as { id: string };
+                localStorage.removeItem(CACHE_KEY);
+                setCreatedId(data.id);
             }
-            const data = (await res.json()) as { id: string };
-            localStorage.removeItem(CACHE_KEY);
-            setCreatedId(data.id);
         } catch (e) {
             console.error(e);
             setError("通信エラーが発生しました");
@@ -315,7 +343,7 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
         );
     }
 
-    if (!googleStatus?.hasSession) {
+    if (!isEdit && !googleStatus?.hasSession) {
         const returnTo = "/office-hours/create";
         return (
             <div className="max-w-xl mx-auto py-12 px-4 space-y-6">
@@ -343,7 +371,7 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
         );
     }
 
-    if (googleStatus?.hasSession && !googleStatus.hasUserId) {
+    if (!isEdit && googleStatus?.hasSession && !googleStatus.hasUserId) {
         const returnTo = "/office-hours/create";
         return (
             <div className="max-w-xl mx-auto py-12 px-4 space-y-6">
@@ -373,9 +401,13 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
     return (
         <div className="w-full py-6 px-4 sm:px-6 lg:px-8">
             <div className="space-y-1.5 mb-6">
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour を作成</h1>
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+                    {isEdit ? "Office Hour の設定を編集" : "Office Hour を作成"}
+                </h1>
                 <p className="text-sm sm:text-base text-muted-foreground">
-                    受付期間と時間帯を指定すると、空き枠が自動で生成されます。主催者の予定と重なる枠は自動で予約不可になります。
+                    {isEdit
+                        ? "設定を変更して「保存」を押してください。カレンダー連携とパスワードは変更できません。"
+                        : "受付期間と時間帯を指定すると、空き枠が自動で生成されます。主催者の予定と重なる枠は自動で予約不可になります。"}
                 </p>
             </div>
 
@@ -451,7 +483,6 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
                                                 {copyMenuOpen === i && (
                                                     <CopyMenu
                                                         sourceIdx={i}
-                                                        days={days}
                                                         onCopy={copyRangesToDays}
                                                         onClose={() => setCopyMenuOpen(null)}
                                                     />
@@ -553,11 +584,11 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
                         </p>
                     </Section>
 
-                    {/* 連携 */}
-                    <Section title="主催者カレンダー連携">
+                    {/* 連携 (編集時は非表示) */}
+                    {!isEdit && <Section title="主催者カレンダー連携">
                         <div className="rounded-md border bg-card/20 p-3 text-sm flex items-center gap-2">
                             <CalendarIcon className="h-4 w-4 text-green-500 shrink-0" aria-hidden="true" />
-                            <span>Googleカレンダー: 連携済み（{googleStatus.email}）</span>
+                            <span>Googleカレンダー: 連携済み（{googleStatus?.email}）</span>
                         </div>
                         <div className="space-y-3">
                             <div className="flex items-center gap-2 text-sm font-medium">
@@ -623,10 +654,10 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
                                 </>
                             )}
                         </div>
-                    </Section>
+                    </Section>}
 
-                    {/* 管理者 */}
-                    <Section title="管理者設定">
+                    {/* 管理者 (編集時は非表示) */}
+                    {!isEdit && <Section title="管理者設定">
                         <Field label="管理者パスワード" required>
                             <Input
                                 type="password"
@@ -640,7 +671,7 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
                                 予約状況を確認する管理画面で使用します。忘れないようにしてください。
                             </p>
                         </Field>
-                    </Section>
+                    </Section>}
 
                     {error && (
                         <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive flex items-start gap-2">
@@ -649,25 +680,37 @@ export function OfficeHourCreateForm({ editData }: { editData?: EditData } = {})
                         </div>
                     )}
 
-                    <div className="flex justify-end pt-2">
+                    <div className="flex items-center justify-end gap-3 pt-2">
+                        {editSaved && (
+                            <span className="text-sm text-green-500 flex items-center gap-1">
+                                <CheckCircle2 className="h-4 w-4" /> 保存しました
+                            </span>
+                        )}
+                        {isEdit && (
+                            <Button variant="outline" asChild>
+                                <Link href={`/office-hours/${editData!.id}/admin`}>管理画面に戻る</Link>
+                            </Button>
+                        )}
                         <Button size="lg" className="gap-2" disabled={!canSubmit || isSubmitting} onClick={handleSubmit}>
                             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                            Office Hour を作成
+                            {isEdit ? "設定を保存" : "Office Hour を作成"}
                         </Button>
                     </div>
                 </div>
 
-                {/* 右カラム: プレビュー（残り全幅、sticky、ビューポート高さいっぱい） */}
-                <div className="flex-1 min-w-0">
-                    <div className="lg:sticky lg:top-4 flex flex-col" style={{ height: "calc(100vh - 2rem)" }}>
-                        <SchedulePreview
-                            icalUrl={campusIcalUrl ?? ""}
-                            windows={windowsForPreview}
-                            slotDurationMin={slotDurationMin}
-                            bufferMin={bufferMin}
-                        />
+                {/* 右カラム: プレビュー（残り全幅、sticky、ビューポート高さいっぱい）— 編集時は非表示 */}
+                {!isEdit && (
+                    <div className="flex-1 min-w-0">
+                        <div className="lg:sticky lg:top-4 flex flex-col" style={{ height: "calc(100vh - 2rem)" }}>
+                            <SchedulePreview
+                                icalUrl={campusIcalUrl ?? ""}
+                                windows={windowsForPreview}
+                                slotDurationMin={slotDurationMin}
+                                bufferMin={bufferMin}
+                            />
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
         </div>
     );
@@ -696,12 +739,10 @@ function Field({ label, required, children }: { label: string; required?: boolea
 
 function CopyMenu({
     sourceIdx,
-    days,
     onCopy,
     onClose,
 }: {
     sourceIdx: number;
-    days: DayConfig[];
     onCopy: (sourceIdx: number, targetIndices: number[]) => void;
     onClose: () => void;
 }) {
