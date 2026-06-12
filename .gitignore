@@ -54,3 +54,6 @@ wrangler.jsonc
 
 
 !.dev.vars.example
+
+# Local debugging dumps (e.g. wrangler d1 execute output)
+tmp_*.json
