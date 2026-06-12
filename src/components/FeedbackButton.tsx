@@ -82,8 +82,8 @@ ${logs}
                     ヘルプ
                 </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
+            <DialogContent className="max-w-lg max-h-[90vh] flex flex-col">
+                <DialogHeader className="shrink-0">
                     <DialogTitle className="flex items-center gap-2">
                         <HelpCircle className="h-5 w-5" />
                         <span style={{ wordBreak: "keep-all", overflowWrap: "anywhere" }}>{budouxify("ヘルプ・フィードバック")}</span>
@@ -93,7 +93,7 @@ ${logs}
                     </DialogDescription>
                 </DialogHeader>
 
-                <div className="space-y-4">
+                <div className="space-y-4 flex-1 overflow-y-auto min-h-0">
                     <div className="space-y-2">
                         <label className="text-sm font-medium">
                             フィードバック内容
@@ -162,7 +162,7 @@ ${logs}
                     </div>
                 </div>
 
-                <DialogFooter className="flex-col sm:flex-row gap-2">
+                <DialogFooter className="flex-col sm:flex-row gap-2 shrink-0">
                     <Button
                         variant="outline"
                         onClick={() => setIsOpen(false)}

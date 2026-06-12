@@ -4,28 +4,19 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Check, X, Copy, ZoomIn, ZoomOut } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
-import dynamic from "next/dynamic";
 
 import { CUSTOM_PERIODS } from "@/config/periods";
+import CustomPeriodsGridComponent from "@/components/CustomPeriodsGrid";
 
 export { CUSTOM_PERIODS };
 
-// Define the expected props for CustomPeriodsGrid
-interface CustomPeriodsGridProps {
-    groupedDates: Record<string, string[]>;
-    selectedPeriods: string[];
-    togglePeriod: (id: string) => void;
-    busyPeriodIds?: string[];
-}
-
-// Dynamically import CustomPeriodsGrid only if CUSTOM_PERIODS is not empty
-const CustomPeriodsGrid = CUSTOM_PERIODS.length > 0
-    ? dynamic<CustomPeriodsGridProps>(() => import('@/components/CustomPeriodsGrid'), { ssr: false })
-    : null; // Render nothing if CUSTOM_PERIODS is empty
+// Render CustomPeriodsGrid only if CUSTOM_PERIODS is not empty.
+const CustomPeriodsGrid = CUSTOM_PERIODS.length > 0 ? CustomPeriodsGridComponent : null;
 
 export const HOURLY_SLOTS = Array.from({ length: 24 }, (_, i) => {
     const hour = i;
@@ -72,6 +63,9 @@ export function PeriodSelector({
     });
     // Zoom level state (1.2 = default)
     const [zoomLevel, setZoomLevel] = React.useState(1.2);
+    // Hourly range picker state (defaults: 9:00 - 17:00)
+    const [rangeStart, setRangeStart] = React.useState("09:00");
+    const [rangeEnd, setRangeEnd] = React.useState("17:00");
 
     // Synchronize viewDates with selectedPeriods (for AI additions)
     React.useEffect(() => {
@@ -237,6 +231,37 @@ export function PeriodSelector({
         onChange(selectedPeriods.filter(p => !p.startsWith(dateStr)));
     };
 
+    // Parse "HH:MM" → hour integer (rounded down). Returns null on invalid.
+    const parseHour = (value: string): number | null => {
+        const m = /^(\d{1,2}):(\d{2})$/.exec(value);
+        if (!m) return null;
+        const h = Number(m[1]);
+        if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+        return h;
+    };
+
+    const applyHourlyRange = (mode: "add" | "remove") => {
+        if (!focusedDate) return;
+        const start = parseHour(rangeStart);
+        const end = parseHour(rangeEnd);
+        if (start === null || end === null || end <= start) return;
+        const dateStr = format(focusedDate, "yyyy-MM-dd");
+        const targetKeys = new Set(
+            HOURLY_SLOTS
+                .filter(h => h.id >= start && h.id < end)
+                .map(h => `${dateStr}_H${h.id}`)
+        );
+        if (mode === "add") {
+            const next = [...selectedPeriods];
+            targetKeys.forEach(k => {
+                if (!next.includes(k)) next.push(k);
+            });
+            onChange(next);
+        } else {
+            onChange(selectedPeriods.filter(p => !targetKeys.has(p)));
+        }
+    };
+
     const renderTimeAxis = () => {
         const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i);
         return (
@@ -281,12 +306,11 @@ export function PeriodSelector({
                         onSelect={onSelectDates}
                         className="rounded-md border bg-background"
                         disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
-                        initialFocus
                         locale={ja}
                     />
                 </div>
 
-                <div className="flex-1 rounded-md border bg-card p-3 shadow-sm flex flex-col min-h-[200px] md:min-h-0 overflow-hidden">
+                <div className="rounded-md border bg-card p-3 shadow-sm flex flex-col shrink-0">
                     <h3 className="font-semibold text-sm mb-3 px-2 flex justify-between items-center shrink-0">
                         <span>クイック選択</span>
                         {focusedDate && (
@@ -295,46 +319,46 @@ export function PeriodSelector({
                             </span>
                         )}
                     </h3>
-                    <ScrollArea className="flex-1 min-h-0">
-                        <div className="space-y-3">
-                            {!focusedDate ? (
-                                <div className="text-sm text-muted-foreground text-center py-8">
-                                    右側のカレンダーから日付を選択してください
-                                </div>
-                            ) : (
-                                <>
-                                    <div className="flex flex-wrap items-center gap-1 sticky top-0 bg-card py-1 z-10">
-                                        {CUSTOM_PERIODS.length > 0 && (
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                size="sm"
-                                                className="h-7 px-2 text-xs"
-                                                onClick={selectDayPeriods}
-                                            >
-                                                時限を全選択
-                                            </Button>
-                                        )}
+                    <div className="space-y-3 flex-1 min-h-0 flex flex-col">
+                        {!focusedDate ? (
+                            <div className="text-sm text-muted-foreground text-center py-8">
+                                右側のカレンダーから日付を選択してください
+                            </div>
+                        ) : (
+                            <>
+                                <div className="flex flex-wrap items-center gap-1">
+                                    {CUSTOM_PERIODS.length > 0 && (
                                         <Button
                                             type="button"
                                             variant="outline"
                                             size="sm"
-                                            className="h-7 px-2 text-xs"
-                                            onClick={selectDayHourly}
+                                            className="h-7 px-2 text-[10px]"
+                                            onClick={selectDayPeriods}
                                         >
-                                            1h毎を全選択
+                                            時限を全選択
                                         </Button>
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            size="sm"
-                                            className="h-7 px-2 text-xs text-muted-foreground"
-                                            onClick={clearDayAll}
-                                        >
-                                            解除
-                                        </Button>
-                                    </div>
-                                    {CustomPeriodsGrid && (
+                                    )}
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        className="h-7 px-2 text-[10px]"
+                                        onClick={selectDayHourly}
+                                    >
+                                        1日中
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 px-2 text-[10px] text-muted-foreground"
+                                        onClick={clearDayAll}
+                                    >
+                                        解除
+                                    </Button>
+                                </div>
+                                {CustomPeriodsGrid && (
+                                    <div className="shrink-0">
                                         <CustomPeriodsGrid
                                             groupedDates={{ [format(focusedDate, "yyyy-MM-dd")]: [] }}
                                             selectedPeriods={selectedPeriods}
@@ -344,42 +368,66 @@ export function PeriodSelector({
                                             }}
                                             busyPeriodIds={busyPeriodIds}
                                         />
-                                    )}
-                                    <div>
-                                        <h4 className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-tight">時間 (1時間ごと)</h4>
-                                        <div className="grid grid-cols-4 lg:grid-cols-6 gap-1">
-                                            {HOURLY_SLOTS.map(h => {
-                                                const dateKey = `${format(focusedDate, "yyyy-MM-dd")}_H${h.id}`;
-                                                const isSelected = selectedPeriods.includes(dateKey);
-                                                const isBusy = busyPeriodIds.includes(dateKey);
-                                                return (
-                                                    <Button
-                                                        key={h.id}
-                                                        type="button"
-                                                        variant={isSelected ? "default" : "outline"}
-                                                        size="sm"
-                                                        className={cn(
-                                                            "h-9 px-0 flex flex-col gap-0",
-                                                            isBusy ? "opacity-50 cursor-not-allowed border-red-200 bg-red-50 text-red-500 hover:bg-red-50 hover:text-red-500" : ""
-                                                        )}
-                                                        onClick={() => toggleFocusedPeriod(h.id, "H")}
-                                                        disabled={isBusy}
-                                                    >
-                                                        <span className="text-xs leading-none">{h.id}:00</span>
-                                                    </Button>
-                                                );
-                                            })}
-                                        </div>
                                     </div>
-                                </>
-                            )}
-                        </div>
-                    </ScrollArea>
+                                )}
+                                <div className="shrink-0">
+                                    <h4 className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-tight">時間範囲</h4>
+                                    <div className="flex items-center gap-1.5">
+                                        <Input
+                                            type="time"
+                                            step={3600}
+                                            min="00:00"
+                                            max="23:00"
+                                            value={rangeStart}
+                                            onChange={(e) => setRangeStart(e.target.value)}
+                                            className="h-8 px-2 text-xs tabular-nums"
+                                            aria-label="開始時刻"
+                                        />
+                                        <span className="text-xs text-muted-foreground">〜</span>
+                                        <Input
+                                            type="time"
+                                            step={3600}
+                                            min="01:00"
+                                            max="24:00"
+                                            value={rangeEnd}
+                                            onChange={(e) => setRangeEnd(e.target.value)}
+                                            className="h-8 px-2 text-xs tabular-nums"
+                                            aria-label="終了時刻"
+                                        />
+                                    </div>
+                                    <div className="flex gap-1 mt-1.5">
+                                        <Button
+                                            type="button"
+                                            variant="default"
+                                            size="sm"
+                                            className="h-7 px-2 text-[10px] flex-1"
+                                            onClick={() => applyHourlyRange("add")}
+                                        >
+                                            この範囲を追加
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 px-2 text-[10px]"
+                                            onClick={() => applyHourlyRange("remove")}
+                                        >
+                                            外す
+                                        </Button>
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground mt-1.5 leading-snug">
+                                        個別の時間は右のタイムラインをクリックで切替できます。
+                                    </p>
+                                </div>
+                            </>
+                        )}
+                    </div>
                 </div>
             </div>
 
             {/* Right Main Area: Timeline */}
-            <div className="flex-1 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-full overflow-hidden">
+            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-full overflow-hidden">
+
                 <ScrollArea className="flex-1 w-full h-full overscroll-contain">
                     {/* Horizontal Scroll Wrapper */}
                     <div className="min-w-full w-fit">
