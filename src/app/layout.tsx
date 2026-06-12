@@ -1,13 +1,17 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Noto_Sans_JP, Geist_Mono } from "next/font/google";
 import { siteConfig } from "@/config/site";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { FeedbackButton } from "@/components/FeedbackButton";
 
-const geistSans = Geist({
-	variable: "--font-geist-sans",
+// デジタル庁デザインシステム(DADS)準拠: 本文書体は Noto Sans JP
+const notoSansJP = Noto_Sans_JP({
+	variable: "--font-noto-sans-jp",
 	subsets: ["latin"],
+	weight: ["400", "500", "700"],
+	display: "swap",
+	preload: false, // CJK フォントは preload 非対応
 });
 
 const geistMono = Geist_Mono({
@@ -36,7 +40,7 @@ export default function RootLayout({
 			<head>
 				<link rel="icon" href="/favicon.svg" type="image/svg+xml"></link>
 			</head>
-			<body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+			<body className={`${notoSansJP.variable} ${geistMono.variable} antialiased`}>
 				<ThemeProvider
 					attribute="class"
 					defaultTheme="system"

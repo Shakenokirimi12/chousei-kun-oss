@@ -55,5 +55,8 @@ wrangler.jsonc
 
 !.dev.vars.example
 
+# Local Claude Code preview launch config
+.claude/
+
 # Local debugging dumps (e.g. wrangler d1 execute output)
 tmp_*.json

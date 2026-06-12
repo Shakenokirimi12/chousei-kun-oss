@@ -35,15 +35,17 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
     }
 
     return (
-        <div className="min-h-screen bg-background text-foreground p-2 sm:p-4 md:p-6 lg:p-8">
-            <div className="w-full space-y-8">
-                <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
-                    <div>
-                        <h1 className="text-4xl font-extrabold tracking-tight">{event.title}</h1>
-                        <p className="text-muted-foreground mt-2 text-lg">{event.description ?? ""}</p>
+        <div className="min-h-screen bg-background text-foreground px-3 sm:px-4 md:px-6 lg:px-8 pt-8 sm:pt-10 lg:pt-12 pb-24">
+            <div className="w-full space-y-6 sm:space-y-8">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 sm:gap-4">
+                    <div className="min-w-0">
+                        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight break-words">{event.title}</h1>
+                        {event.description ? (
+                            <p className="text-muted-foreground mt-1.5 sm:mt-2 text-sm sm:text-base lg:text-lg break-words">{event.description}</p>
+                        ) : null}
                     </div>
-                    <Link href={`/${id}/results`}>
-                        <Button variant="outline" className="gap-2 group">
+                    <Link href={`/${id}/results`} className="w-full sm:w-auto shrink-0">
+                        <Button variant="outline" className="gap-2 group w-full sm:w-auto">
                             結果を確認する
                             <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                         </Button>

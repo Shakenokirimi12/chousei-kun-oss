@@ -14,7 +14,7 @@ interface AvailabilityTimelineProps {
     availabilities: number[]; // 0=X, 1=Tri, 2=O
     onStatusChange: (idx: number, status: number) => void;
     onDayStatusChange?: (dateStr: string, status: number) => void;
-    busyPeriods?: string[]; // Format: "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
+    busyEvents?: { start: string; end: string; summary: string }[];
     okCounts?: number[];
     mode?: "response" | "admin" | "results";
     confirmedCandidateIdx?: number | null;
@@ -28,13 +28,15 @@ const parseTimeToMinutes = (timeStr: string) => {
     return h * 60 + m;
 };
 
-const START_HOUR = 0;
-const END_HOUR = 24;
-const START_MINUTES = START_HOUR * 60;
+// タイムラインに余白として確保する前後の時間（分）
+const RANGE_PADDING_MIN = 60;
+// 候補が無いときのフォールバック表示範囲
+const FALLBACK_START_HOUR = 8;
+const FALLBACK_END_HOUR = 20;
 
 const getSlotInfo = (type: "P" | "H", id: number) => {
     if (type === "P") {
-        const p = CUSTOM_PERIODS.find((x: any) => x.id === id);
+        const p = CUSTOM_PERIODS.find((x) => x.id === id);
         if (!p) return null;
         const [start, end] = p.time.split("-");
         return {
@@ -56,8 +58,8 @@ const getSlotInfo = (type: "P" | "H", id: number) => {
     }
 };
 
-const getBlockStyle = (startMin: number, endMin: number, zoomLevel: number) => {
-    const top = (startMin - START_MINUTES) * zoomLevel;
+const getBlockStyle = (startMin: number, endMin: number, zoomLevel: number, viewStartMin: number) => {
+    const top = (startMin - viewStartMin) * zoomLevel;
     const height = (endMin - startMin) * zoomLevel;
     return { top: `${top}px`, height: `${height}px` };
 };
@@ -67,7 +69,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
     availabilities,
     onStatusChange,
     onDayStatusChange,
-    busyPeriods = [],
+    busyEvents = [],
     okCounts = [],
     mode = "response",
     confirmedCandidateIdx = null,
@@ -77,7 +79,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 }: AvailabilityTimelineProps) {
     const [focusedDate, setFocusedDate] = useState<Date | null>(null);
     const viewportRef = useRef<HTMLDivElement>(null);
-    const [zoomLevel, setZoomLevel] = useState(1.8);
+    const [zoomLevel, setZoomLevel] = useState(2.2);
     const [selectedParticipantView, setSelectedParticipantView] = useState<{
         candidateIdx: number;
         status: "ok" | "maybe" | "ng";
@@ -112,28 +114,32 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
         };
     }, []);
 
-    const earliestStartMin = useMemo(() => {
-        if (candidates.length === 0) return 0;
-        let min = 1440; // 24 hours
+    // 候補が収まる時間帯だけを表示する（0〜24時の全描画をやめ、空白を削減）。
+    const { viewStartMin, viewEndMin } = useMemo(() => {
+        let minStart = 1440;
+        let maxEnd = 0;
         candidates.forEach(c => {
-            const [_, slot] = c.split("_");
+            const [, slot] = c.split("_");
             const type = slot.startsWith("P") ? "P" : "H";
-            const id = parseInt(slot.replace(/[PH]/, ""));
+            const id = parseInt(slot.replace(/[PH]/, ""), 10);
             const info = getSlotInfo(type, id);
-            if (info && info.startMin < min) {
-                min = info.startMin;
+            if (info) {
+                if (info.startMin < minStart) minStart = info.startMin;
+                if (info.endMin > maxEnd) maxEnd = info.endMin;
             }
         });
-        return min === 1440 ? 0 : min;
+        if (minStart === 1440 || maxEnd === 0) {
+            return { viewStartMin: FALLBACK_START_HOUR * 60, viewEndMin: FALLBACK_END_HOUR * 60 };
+        }
+        // 前後に余白を取り、時間境界(正時)に丸める
+        const startHour = Math.max(0, Math.floor((minStart - RANGE_PADDING_MIN) / 60));
+        const endHour = Math.min(24, Math.ceil((maxEnd + RANGE_PADDING_MIN) / 60));
+        return { viewStartMin: startHour * 60, viewEndMin: endHour * 60 };
     }, [candidates]);
 
-    useEffect(() => {
-        if (viewportRef.current && earliestStartMin > 0) {
-            const scrollPos = (earliestStartMin - START_MINUTES) * zoomLevel;
-            // Slightly offset to show the header clearly
-            viewportRef.current.scrollTop = Math.max(0, scrollPos - 20);
-        }
-    }, [earliestStartMin, zoomLevel]);
+    const totalMinutes = viewEndMin - viewStartMin;
+    const startHour = Math.floor(viewStartMin / 60);
+    const endHour = Math.ceil(viewEndMin / 60);
 
     const viewDates = useMemo(() => {
         const datesMap = new Map<string, Date>();
@@ -146,6 +152,39 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
         const sorted = Array.from(datesMap.values()).sort((a, b) => a.getTime() - b.getTime());
         return sorted;
     }, [candidates]);
+
+    // 予定(busyEvents)を日付ごとに前処理＆マージしておく。
+    // availabilities の変化（出欠トグル）では再計算されないようにして、無駄な再計算を防ぐ。
+    const busyByDate = useMemo(() => {
+        const map = new Map<string, { startMin: number; endMin: number; summary: string }[]>();
+        busyEvents.forEach(ev => {
+            const s = new Date(ev.start);
+            const e = new Date(ev.end);
+            if (Number.isNaN(s.getTime())) return;
+            const dateStr = format(s, "yyyy-MM-dd");
+            const startMin = s.getHours() * 60 + s.getMinutes();
+            let endMin = e.getHours() * 60 + e.getMinutes();
+            if (endMin <= startMin && e.getDate() !== s.getDate()) endMin = 1440;
+            const arr = map.get(dateStr) ?? [];
+            arr.push({ startMin, endMin, summary: ev.summary });
+            map.set(dateStr, arr);
+        });
+        // 同名・重複/連続する予定をマージ
+        for (const [dateStr, arr] of map) {
+            arr.sort((a, b) => a.startMin - b.startMin);
+            const merged: typeof arr = [];
+            arr.forEach(curr => {
+                const prev = merged[merged.length - 1];
+                if (prev && prev.summary === curr.summary && curr.startMin <= prev.endMin) {
+                    prev.endMin = Math.max(prev.endMin, curr.endMin);
+                } else {
+                    merged.push({ ...curr });
+                }
+            });
+            map.set(dateStr, merged);
+        }
+        return map;
+    }, [busyEvents]);
 
     useEffect(() => {
         if (!focusedDate && viewDates.length > 0) {
@@ -186,14 +225,14 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
         : "";
 
     const renderTimeAxis = () => {
-        const hours = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_HOUR + i);
+        const hours = Array.from({ length: endHour - startHour + 1 }, (_, i) => startHour + i);
         return (
             <div className="relative w-12 flex-shrink-0 border-r bg-background/50 backdrop-blur z-20">
                 {hours.map(h => (
                     <div
                         key={h}
                         className="absolute w-full text-right pr-2 text-xs text-muted-foreground -translate-y-1/2 border-t border-transparent"
-                        style={{ top: `${(h * 60 - START_MINUTES) * zoomLevel}px` }}
+                        style={{ top: `${(h * 60 - viewStartMin) * zoomLevel}px` }}
                     >
                         {h}:00
                     </div>
@@ -203,7 +242,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
     };
 
     return (
-        <div className="flex flex-col rounded-md border bg-background shadow-sm overflow-hidden h-[600px]">
+        <div className="flex flex-col rounded-md border bg-background shadow-sm overflow-hidden h-[70vh] sm:h-[600px]">
             <div className="border-b bg-muted/20 p-2 text-xs text-muted-foreground flex flex-col sm:flex-row justify-between items-center gap-2">
                 <div className="text-center sm:text-left">
                     {mode === "admin" || mode === "results" ? (
@@ -238,7 +277,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                     >
                         <ZoomOut className="w-4 h-4" />
                     </button>
-                    <span className="text-[10px] w-8 text-center font-medium text-foreground">
+                    <span className="text-xs w-8 text-center font-medium text-foreground">
                         {Math.round(zoomLevel * 100 / 1.2)}%
                     </span>
                     <button
@@ -281,6 +320,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                     }}
                                                     className="w-5 h-5 rounded-full border border-green-400/60 bg-green-100 text-green-600 hover:bg-green-600 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
                                                     title="この日のすべてを○にする"
+                                                    aria-label="この日のすべてを参加可能(○)にする"
                                                 >
                                                     <Circle className="w-3 h-3" />
                                                 </button>
@@ -292,12 +332,13 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                     }}
                                                     className="w-5 h-5 rounded-full border border-red-400/60 bg-red-100 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
                                                     title="この日のすべてを×にする"
+                                                    aria-label="この日のすべてを不参加(×)にする"
                                                 >
                                                     <X className="w-3 h-3" />
                                                 </button>
                                             </div>
                                         ) : null}
-                                        <span className="text-[10px] uppercase leading-none">{format(date, "E", { locale: ja })}</span>
+                                        <span className="text-xs uppercase leading-none">{format(date, "E", { locale: ja })}</span>
                                         <span className="text-sm font-bold leading-none mt-0.5">{format(date, "M/d", { locale: ja })}</span>
                                     </div>
                                 )
@@ -306,7 +347,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                     </div>
 
                     {/* Timeline Body */}
-                    <div className="flex relative min-w-max" style={{ height: `${(END_HOUR - START_HOUR) * 60 * zoomLevel}px` }}>
+                    <div className="flex relative min-w-max" style={{ height: `${totalMinutes * zoomLevel}px` }}>
                         <div className="sticky left-0 z-30 w-12 flex-shrink-0 border-r bg-background">
                             {renderTimeAxis()}
                         </div>
@@ -314,7 +355,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                         <div className="flex-1 flex relative">
                             {/* Grid Lines */}
                             <div className="absolute inset-0 pointer-events-none z-0">
-                                {Array.from({ length: 25 }).map((_, h) => (
+                                {Array.from({ length: endHour - startHour + 1 }).map((_, h) => (
                                     <div
                                         key={h}
                                         className="absolute w-full border-t border-border/40 dashed"
@@ -327,23 +368,26 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                 const dateStr = format(date, "yyyy-MM-dd");
                                 return (
                                     <div key={dateStr} className="flex-1 border-r relative min-w-[100px]">
-                                        {/* Busy Periods */}
-                                        {busyPeriods.filter(p => p.startsWith(dateStr)).map((bp, j) => {
-                                            const [_, slot] = bp.split("_");
-                                            const type = slot.startsWith("P") ? "P" : "H";
-                                            const id = parseInt(slot.replace(/[PH]/, ""));
-                                            const info = getSlotInfo(type, id);
-                                            if (!info) return null;
-                                            return (
-                                                <div
-                                                    key={`busy-${j}`}
-                                                    className="absolute inset-x-1 rounded bg-red-100/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/20 z-10 pointer-events-none flex items-center justify-center"
-                                                    style={getBlockStyle(info.startMin, info.endMin, zoomLevel)}
-                                                >
-                                                    <span className="text-[10px] text-red-400 font-bold opacity-30">予定あり</span>
-                                                </div>
-                                            );
-                                        })}
+                                        {/* Busy Periods (precomputed & memoized per date) */}
+                                        {(() => {
+                                            const merged = busyByDate.get(dateStr) ?? [];
+
+                                            return merged.map((ev, j) => {
+                                                const style = getBlockStyle(ev.startMin, ev.endMin, zoomLevel, viewStartMin);
+                                                return (
+                                                    <div
+                                                        key={`busy-${j}`}
+                                                        className="absolute inset-x-1 rounded bg-red-100/50 dark:bg-red-900/20 border border-red-200/50 dark:border-red-800/30 z-10 pointer-events-none flex items-center justify-center overflow-hidden"
+                                                        style={style}
+                                                        title={ev.summary}
+                                                    >
+                                                        <span className="text-xs text-red-500 font-bold opacity-70 px-1 truncate w-full text-center">
+                                                            {ev.summary}
+                                                        </span>
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
 
                                         {/* Candidate Blocks */}
                                         {candidates.map((c, idx) => {
@@ -355,7 +399,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                             if (!info) return null;
 
                                             const status = availabilities[idx];
-                                            const style = getBlockStyle(info.startMin, info.endMin, zoomLevel);
+                                            const style = getBlockStyle(info.startMin, info.endMin, zoomLevel, viewStartMin);
 
                                             return (
                                                 <div
@@ -382,8 +426,17 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                     {/* Mobile Only: Tap to Cycle */}
                                                     {mode === "response" ? (
                                                         <div
+                                                            role="button"
+                                                            tabIndex={0}
+                                                            aria-label={`${info.label} の出欠を切り替え`}
                                                             className="md:hidden absolute inset-0 z-30 cursor-pointer"
                                                             onClick={() => onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2)}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === "Enter" || e.key === " ") {
+                                                                    e.preventDefault();
+                                                                    onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2);
+                                                                }
+                                                            }}
                                                         />
                                                     ) : null}
 
@@ -391,23 +444,23 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                         <div className="flex justify-between items-start mb-0.5">
                                                             <div className="flex flex-col leading-tight">
                                                                 <div className="flex items-center gap-1">
-                                                                    <span className="text-[10px] font-bold opacity-70">{info.label}</span>
+                                                                    <span className="text-xs font-bold opacity-70">{info.label}</span>
                                                                     {(mode === "admin" || mode === "results") &&
                                                                         confirmedCandidateIdx !== idx &&
                                                                         candidateScores[idx] === maxScore &&
                                                                         maxScore > 0 ? (
-                                                                        <span className="text-[9px] bg-sky-100 text-sky-700 px-1 rounded-sm font-bold">
+                                                                        <span className="text-xs bg-sky-100 text-sky-700 px-1 rounded-sm font-bold">
                                                                             推奨
                                                                         </span>
                                                                     ) : null}
                                                                     {(mode === "admin" || mode === "results") &&
                                                                         confirmedCandidateIdx === idx ? (
-                                                                        <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1 rounded-sm font-bold">
+                                                                        <span className="text-xs bg-emerald-100 text-emerald-700 px-1 rounded-sm font-bold">
                                                                             確定
                                                                         </span>
                                                                     ) : null}
                                                                     {(okCounts[idx] || 0) > 0 && (
-                                                                        <span className="text-[9px] bg-primary/20 text-primary px-1 rounded-sm font-bold">
+                                                                        <span className="text-xs bg-primary/20 text-primary px-1 rounded-sm font-bold">
                                                                             {(okCounts[idx] || 0)}人
                                                                         </span>
                                                                     )}
@@ -421,7 +474,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 
                                                         {mode === "admin" || mode === "results" ? (
                                                             <div className="flex-1 flex flex-col justify-end gap-1">
-                                                                <div className="grid grid-cols-3 gap-1 text-[9px]">
+                                                                <div className="grid grid-cols-3 gap-1 text-xs">
                                                                     <button
                                                                         type="button"
                                                                         className="rounded border border-green-400/50 bg-green-500/20 text-green-700 text-center py-1 hover:bg-green-500/35 transition-colors cursor-pointer"
@@ -460,7 +513,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                     <button
                                                                         type="button"
                                                                         className={cn(
-                                                                            "rounded text-[10px] py-1 px-2 font-semibold transition-colors self-end mt-auto",
+                                                                            "rounded text-xs py-1 px-2 font-semibold transition-colors self-end mt-auto",
                                                                             confirmedCandidateIdx === idx
                                                                                 ? "bg-emerald-700 text-white"
                                                                                 : "bg-foreground text-background hover:opacity-90"
@@ -475,7 +528,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                 ) : (
                                                                     <div
                                                                         className={cn(
-                                                                            "rounded text-[10px] py-1 px-2 font-semibold text-center self-end mt-auto",
+                                                                            "rounded text-xs py-1 px-2 font-semibold text-center self-end mt-auto",
                                                                             confirmedCandidateIdx === idx
                                                                                 ? "bg-emerald-600 text-white"
                                                                                 : "bg-muted text-muted-foreground"
@@ -494,6 +547,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         status === 2 ? "bg-green-500 text-white shadow-inner" : "hover:bg-green-500/20 text-green-600 dark:text-green-400"
                                                                     )}
                                                                     title="参加可能"
+                                                                    aria-label="参加可能(○)"
+                                                                    aria-pressed={status === 2}
                                                                 >
                                                                     <Circle className="w-3 h-3" />
                                                                 </button>
@@ -504,6 +559,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         status === 1 ? "bg-yellow-500 text-white shadow-inner" : "hover:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
                                                                     )}
                                                                     title="調整中"
+                                                                    aria-label="調整中(△)"
+                                                                    aria-pressed={status === 1}
                                                                 >
                                                                     <Triangle className="w-3 h-3" />
                                                                 </button>
@@ -514,6 +571,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         status === 0 ? "bg-red-500 text-white shadow-inner" : "hover:bg-red-500/20 text-red-600 dark:text-red-400"
                                                                     )}
                                                                     title="不参加"
+                                                                    aria-label="不参加(×)"
+                                                                    aria-pressed={status === 0}
                                                                 >
                                                                     <X className="w-3 h-3" />
                                                                 </button>

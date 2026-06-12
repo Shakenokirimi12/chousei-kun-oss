@@ -16,6 +16,8 @@ import {
     GOOGLE_CALENDAR_READ_SCOPE,
     GOOGLE_CALENDAR_WRITE_SCOPE,
 } from "../utils";
+import { encryptToken } from "@/lib/token-crypto";
+import { createUserService } from "@/server/services/user.service";
 
 type Bindings = {
     DB: D1Database;
@@ -26,9 +28,9 @@ export const googleRoutes = new Hono<{ Bindings: Bindings }>();
 googleRoutes.get("/auth/start", sValidator("query", googleStartQuerySchema), async (c) => {
     const clientId = getEnvOrThrow("GOOGLE_CLIENT_ID");
     const redirectUri = getEnvOrThrow("GOOGLE_REDIRECT_URI");
-    const { returnTo } = c.req.valid("query");
+    const { returnTo, userId } = c.req.valid("query");
     const nonce = crypto.randomUUID();
-    const state = encodeState({ nonce, returnTo });
+    const state = encodeState({ nonce, returnTo, userId });
 
     const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     authUrl.searchParams.set("client_id", clientId);
@@ -54,7 +56,7 @@ googleRoutes.get("/auth/callback", async (c) => {
 
     const cookieHeader = c.req.header("cookie") ?? "";
     const nonceFromCookie = parseCookieValue(cookieHeader, "chousei_google_oauth_nonce");
-    const decoded = decodeState<{ nonce: string; returnTo?: string }>(state);
+    const decoded = decodeState<{ nonce: string; returnTo?: string; userId?: string }>(state);
     if (!nonceFromCookie || decoded.nonce !== nonceFromCookie) {
         return c.json({ error: "Invalid OAuth state" }, 400);
     }
@@ -69,6 +71,7 @@ googleRoutes.get("/auth/callback", async (c) => {
             redirect_uri: redirectUri,
             grant_type: "authorization_code",
         }),
+        signal: AbortSignal.timeout(10_000),
     });
     if (!tokenRes.ok) return c.json({ error: "Failed to exchange token" }, 500);
     const tokenJson = await tokenRes.json() as {
@@ -80,6 +83,7 @@ googleRoutes.get("/auth/callback", async (c) => {
 
     const userInfoRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
         headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+        signal: AbortSignal.timeout(10_000),
     });
     if (!userInfoRes.ok) return c.json({ error: "Failed to fetch user info" }, 500);
     const userInfo = await userInfoRes.json() as { email: string };
@@ -88,18 +92,34 @@ googleRoutes.get("/auth/callback", async (c) => {
     const sessionId = crypto.randomUUID();
     const now = Date.now();
     const expiresAt = Math.floor(now / 1000) + tokenJson.expires_in;
+
+    // userId が state 経由で来ていればそのユーザーを getOrCreate
+    let resolvedUserId: string | null = null;
+    if (decoded.userId) {
+        const userService = createUserService(db);
+        const user = await userService.getOrCreate(decoded.userId);
+        resolvedUserId = user.id;
+    }
+
     await db.insert(googleOauthSessions).values({
         sessionId,
+        userId: resolvedUserId,
         email: userInfo.email,
-        accessToken: tokenJson.access_token,
-        refreshToken: tokenJson.refresh_token ?? null,
+        accessToken: (await encryptToken(tokenJson.access_token))!,
+        refreshToken: await encryptToken(tokenJson.refresh_token ?? null),
         expiresAt,
         createdAt: now,
         updatedAt: now,
     });
 
-    const redirectTo =
-        decoded.returnTo && decoded.returnTo.startsWith("/") ? decoded.returnTo : "/";
+    // オープンリダイレクト対策: 単一スラッシュ始まりの相対パスのみ許可
+    // （`//evil.com` や `/\evil.com` のようなプロトコル相対 URL を拒否）
+    const isSafeReturnTo =
+        typeof decoded.returnTo === "string" &&
+        decoded.returnTo.startsWith("/") &&
+        !decoded.returnTo.startsWith("//") &&
+        !decoded.returnTo.startsWith("/\\");
+    const redirectTo = isSafeReturnTo ? decoded.returnTo! : "/";
     const secureAttr = cookieSecurityAttr(c.req.url);
     c.header(
         "Set-Cookie",
@@ -125,6 +145,7 @@ googleRoutes.get("/calendar/events", async (c) => {
 
     const calendarListRes = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
         headers: { Authorization: `Bearer ${session.accessToken}` },
+        signal: AbortSignal.timeout(10_000),
     });
     if (!calendarListRes.ok) return c.json({ error: "Failed to fetch calendar list" }, 500);
     const calendarList = await calendarListRes.json() as { items?: Array<{ id: string }> };
@@ -136,7 +157,7 @@ googleRoutes.get("/calendar/events", async (c) => {
     for (const calendarId of calendarIds) {
         const evRes = await fetch(
             `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&maxResults=250`,
-            { headers: { Authorization: `Bearer ${session.accessToken}` } }
+            { headers: { Authorization: `Bearer ${session.accessToken}` }, signal: AbortSignal.timeout(10_000) }
         );
         if (!evRes.ok) continue;
         const evJson = await evRes.json() as {
@@ -175,6 +196,7 @@ googleRoutes.get("/session-status", async (c) => {
             email: null,
             hasCalendarReadScope: false,
             hasCalendarWriteScope: false,
+            hasUserId: false,
         });
     }
 
@@ -186,6 +208,7 @@ googleRoutes.get("/session-status", async (c) => {
             email: null,
             hasCalendarReadScope: false,
             hasCalendarWriteScope: false,
+            hasUserId: false,
         });
     }
 
@@ -194,6 +217,7 @@ googleRoutes.get("/session-status", async (c) => {
         email: session.email,
         hasCalendarReadScope: scopes.includes(GOOGLE_CALENDAR_READ_SCOPE),
         hasCalendarWriteScope: scopes.includes(GOOGLE_CALENDAR_WRITE_SCOPE),
+        hasUserId: !!session.userId,
     });
 });
 

@@ -4,14 +4,23 @@ import { apiApp } from "@/server/api/app";
 export async function handleApiRequest(request: Request) {
     try {
         const { env } = await getCloudflareContext();
-        const response = await apiApp.fetch(request, { DB: env.DB });
-        
-        // Ensure proper cache headers for API responses
-        if (!response.headers.has("Cache-Control")) {
-            response.headers.set("Cache-Control", "no-store, max-age=0");
+        const response = await apiApp.fetch(request, env);
+
+        // Next.js may strip headers from redirect responses returned directly.
+        // Re-construct the response to ensure all headers (especially Set-Cookie) survive.
+        const headers = new Headers();
+        response.headers.forEach((value, key) => {
+            headers.append(key, value);
+        });
+        if (!headers.has("Cache-Control")) {
+            headers.set("Cache-Control", "no-store, max-age=0");
         }
-        
-        return response;
+
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+        });
     } catch (error) {
         console.error("[API Handler Error]", error);
         return new Response(

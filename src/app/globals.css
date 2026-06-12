@@ -6,6 +6,10 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
+  /* DADS 準拠フォント (Noto Sans JP) */
+  --font-sans: var(--font-noto-sans-jp), ui-sans-serif, system-ui, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
@@ -102,6 +106,8 @@
 
   body {
     @apply bg-background text-foreground;
+    /* DADS 準拠: 本文書体 Noto Sans JP（@theme の解決に依存せず確実に適用） */
+    font-family: var(--font-noto-sans-jp), ui-sans-serif, system-ui, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
   }
 }
 

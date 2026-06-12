@@ -1,6 +1,7 @@
 "use client";
 
-import { memo, useMemo, type JSX, type ReactNode } from "react";
+import * as React from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { loadDefaultJapaneseParser } from "budoux";
 
 const parser = loadDefaultJapaneseParser();
@@ -8,7 +9,7 @@ const parser = loadDefaultJapaneseParser();
 type Props = {
     children: string;
     className?: string;
-    as?: keyof JSX.IntrinsicElements;
+    as?: keyof React.JSX.IntrinsicElements;
 };
 
 export const BudouX = memo(function BudouX({ 

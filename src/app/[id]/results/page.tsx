@@ -18,17 +18,17 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
     if (!event) notFound();
 
     return (
-        <div className="min-h-screen bg-background text-foreground p-2 sm:p-4 md:p-6 lg:p-8">
+        <div className="min-h-screen bg-background text-foreground px-3 sm:px-4 md:px-6 lg:px-8 pt-8 sm:pt-10 lg:pt-12 pb-24">
             <div className="w-full space-y-6">
-                <div className="flex items-center gap-4">
-                    <Link href={`/${id}`}>
-                        <Button variant="ghost" size="icon">
+                <div className="flex items-center gap-3 sm:gap-4">
+                    <Link href={`/${id}`} className="shrink-0">
+                        <Button variant="ghost" size="icon" aria-label="回答画面に戻る">
                             <ArrowLeft className="h-5 w-5" />
                         </Button>
                     </Link>
-                    <div>
-                        <h1 className="text-2xl font-bold">回答結果</h1>
-                        <p className="text-muted-foreground text-sm">{event.title} の回答状況</p>
+                    <div className="min-w-0">
+                        <h1 className="text-xl sm:text-2xl font-bold">回答結果</h1>
+                        <p className="text-muted-foreground text-xs sm:text-sm truncate">{event.title} の回答状況</p>
                     </div>
                 </div>
 

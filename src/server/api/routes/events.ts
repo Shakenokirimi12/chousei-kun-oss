@@ -13,6 +13,7 @@ import {
     confirmCandidateSchema,
     addToCalendarSchema,
     updateNotificationSchema,
+    ownParticipantParamSchema,
 } from "../schemas";
 import {
     parseCookieValue,
@@ -20,9 +21,12 @@ import {
     insertAvailabilitiesInBatches,
     parseCandidateWindow,
 } from "../utils";
+import { verifyAdminSession } from "../middleware";
+import { enforceRateLimit, clientIp, type RateLimitBinding } from "../rate-limit";
 
 type Bindings = {
     DB: D1Database;
+    AUTH_RATE_LIMITER?: RateLimitBinding;
 };
 
 export const eventsRoutes = new Hono<{ Bindings: Bindings }>();
@@ -65,20 +69,27 @@ eventsRoutes.get("/:id", sValidator("param", eventIdParamSchema), async (c) => {
 
     if (!event) return c.json({ error: "Event not found" }, 404);
 
-    const participantRows = await db.query.participants.findMany({
-        where: eq(participants.eventId, id),
-    });
-
-    const availabilityRows = await db
-        .select({
-            id: availabilities.id,
-            participantId: availabilities.participantId,
-            candidateIdx: availabilities.candidateIdx,
-            status: availabilities.status,
-        })
-        .from(availabilities)
-        .innerJoin(participants, eq(availabilities.participantId, participants.id))
-        .where(eq(participants.eventId, id));
+    // 参加者の通知メール等のPIIは公開エンドポイントで返さない。回答集計に必要な列のみ。
+    // participants と availabilities は独立しているため並列取得する。
+    const [participantRows, availabilityRows] = await Promise.all([
+        db
+            .select({
+                id: participants.id,
+                name: participants.name,
+                comment: participants.comment,
+            })
+            .from(participants)
+            .where(eq(participants.eventId, id)),
+        db
+            .select({
+                participantId: availabilities.participantId,
+                candidateIdx: availabilities.candidateIdx,
+                status: availabilities.status,
+            })
+            .from(availabilities)
+            .innerJoin(participants, eq(availabilities.participantId, participants.id))
+            .where(eq(participants.eventId, id)),
+    ]);
 
     return c.json({
         event: {
@@ -89,6 +100,36 @@ eventsRoutes.get("/:id", sValidator("param", eventIdParamSchema), async (c) => {
         availabilities: availabilityRows,
     });
 });
+
+// 参加者自身の編集用に、自分のレコードのみ返す（イベント所属を検証）。
+// participantId を知っている本人のみが取得できるため、一覧での PII 一括露出を避ける。
+eventsRoutes.get(
+    "/:id/participant/:participantId",
+    sValidator("param", ownParticipantParamSchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id, participantId } = c.req.valid("param");
+        const row = await db.query.participants.findFirst({
+            where: eq(participants.id, participantId),
+            columns: {
+                eventId: true,
+                name: true,
+                comment: true,
+                notifyOnFinalize: true,
+                notificationEmail: true,
+            },
+        });
+        if (!row || row.eventId !== id) {
+            return c.json({ error: "Participant not found" }, 404);
+        }
+        return c.json({
+            name: row.name,
+            comment: row.comment,
+            notifyOnFinalize: row.notifyOnFinalize,
+            notificationEmail: row.notificationEmail,
+        });
+    }
+);
 
 eventsRoutes.post(
     "/:id/participate",
@@ -111,6 +152,13 @@ eventsRoutes.post(
         const newParticipantId = participantId ?? crypto.randomUUID();
 
         if (participantId) {
+            const existing = await db.query.participants.findFirst({
+                where: eq(participants.id, participantId),
+                columns: { eventId: true },
+            });
+            if (!existing || existing.eventId !== eventId) {
+                return c.json({ error: "Participant not found" }, 404);
+            }
             await db
                 .update(participants)
                 .set({
@@ -191,6 +239,12 @@ eventsRoutes.post(
         const { id } = c.req.valid("param");
         const { password } = c.req.valid("json");
 
+        // パスワード総当たり対策（イベント+IP単位）
+        const allowed = await enforceRateLimit(c.env.AUTH_RATE_LIMITER, `auth:${id}:${clientIp(c)}`);
+        if (!allowed) {
+            return c.json({ error: "試行回数が多すぎます。しばらくしてから再度お試しください。" }, 429);
+        }
+
         const event = await db.query.events.findFirst({
             where: eq(events.id, id),
             columns: {
@@ -233,23 +287,17 @@ eventsRoutes.patch(
         const { id } = c.req.valid("param");
         const { title, description, candidates: nextCandidates } = c.req.valid("json");
 
-        const cookie = c.req.header("cookie") ?? "";
-        const tokenMatch = cookie.match(new RegExp(`(?:^|;\\s*)chousei_admin_${id}=([^;]+)`));
-        const sessionToken = tokenMatch?.[1];
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
 
         const currentEvent = await db.query.events.findFirst({
             where: eq(events.id, id),
             columns: {
                 id: true,
                 candidates: true,
-                adminAccessToken: true,
             },
         });
-
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
-        if (!currentEvent.adminAccessToken || !sessionToken || sessionToken !== currentEvent.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
 
         const oldCandidates = JSON.parse(currentEvent.candidates) as string[];
         const indexMap = new Map<string, number>();
@@ -306,23 +354,18 @@ eventsRoutes.post(
     async (c) => {
         const db = createDb(c.env.DB);
         const { id } = c.req.valid("param");
-        const { confirmedCandidateIdx, skipCalendarInvite } = c.req.valid("json");
+        const { confirmedCandidateIdx } = c.req.valid("json");
 
-        const cookie = c.req.header("cookie") ?? "";
-        const tokenMatch = cookie.match(new RegExp(`(?:^|;\\s*)chousei_admin_${id}=([^;]+)`));
-        const sessionToken = tokenMatch?.[1];
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
 
         const currentEvent = await db.query.events.findFirst({
             where: eq(events.id, id),
             columns: {
                 candidates: true,
-                adminAccessToken: true,
             },
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
-        if (!currentEvent.adminAccessToken || !sessionToken || sessionToken !== currentEvent.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
 
         const candidates = JSON.parse(currentEvent.candidates) as string[];
         if (confirmedCandidateIdx !== null && confirmedCandidateIdx >= candidates.length) {
@@ -347,23 +390,19 @@ eventsRoutes.post(
         const { id } = c.req.valid("param");
         const { confirmedCandidateIdx } = c.req.valid("json");
 
-        const cookie = c.req.header("cookie") ?? "";
-        const tokenMatch = cookie.match(new RegExp(`(?:^|;\\s*)chousei_admin_${id}=([^;]+)`));
-        const sessionToken = tokenMatch?.[1];
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
 
+        const cookie = c.req.header("cookie") ?? "";
         const currentEvent = await db.query.events.findFirst({
             where: eq(events.id, id),
             columns: {
                 candidates: true,
-                adminAccessToken: true,
                 title: true,
                 description: true,
             },
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
-        if (!currentEvent.adminAccessToken || !sessionToken || sessionToken !== currentEvent.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
 
         const candidates = JSON.parse(currentEvent.candidates) as string[];
         if (confirmedCandidateIdx >= candidates.length) {
@@ -425,6 +464,7 @@ eventsRoutes.post(
                         displayName: target.name,
                     })),
                 }),
+                signal: AbortSignal.timeout(15_000),
             }
         );
 

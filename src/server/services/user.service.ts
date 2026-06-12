@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import type { DbClient } from "@/server/db/client";
 import { users, participants, events, googleOauthSessions } from "@/server/db/schema";
 import type { User } from "@/types";
@@ -81,14 +81,17 @@ export class UserService {
                 confirmedCandidateIdx: events.confirmedCandidateIdx,
             })
             .from(events)
-            .where(eq(events.confirmedCandidateIdx, events.confirmedCandidateIdx));
+            .where(
+                and(
+                    inArray(events.id, eventIds),
+                    isNotNull(events.confirmedCandidateIdx)
+                )
+            );
 
-        return confirmedEvents
-            .filter((e) => eventIds.includes(e.id) && e.confirmedCandidateIdx !== null)
-            .map((e) => ({
-                ...e,
-                candidates: JSON.parse(e.candidates) as string[],
-            }));
+        return confirmedEvents.map((e) => ({
+            ...e,
+            candidates: JSON.parse(e.candidates) as string[],
+        }));
     }
 
     async linkParticipantToUser(participantId: string, userId: string): Promise<void> {

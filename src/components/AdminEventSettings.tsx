@@ -18,7 +18,7 @@ type Props = {
     initialDescription: string;
     initialCandidates: string[];
     initialConfirmedCandidateIdx: number | null;
-    participants: { id: string; name: string; comment: string | null }[];
+    participants: { id: string; name: string; comment: string | null; notificationEmail?: string | null }[];
     availabilities: { participantId: string; candidateIdx: number; status: number }[];
 };
 
@@ -32,7 +32,7 @@ export function AdminEventSettings({
     availabilities,
 }: Props) {
     const router = useRouter();
-    const [activeTab, setActiveTab] = useState<"edit" | "confirm">("edit");
+    const [activeTab, setActiveTab] = useState<"edit" | "confirm" | "participants">("edit");
     const [title, setTitle] = useState(initialTitle);
     const [description, setDescription] = useState(initialDescription);
     const [selectedPeriods, setSelectedPeriods] = useState(initialCandidates);
@@ -146,6 +146,19 @@ export function AdminEventSettings({
         });
         return participantsByCandidate;
     }, [availabilities, initialCandidates, sortedCandidates, participantNameById]);
+
+    const participantSummaries = useMemo(() => {
+        return participants.map((p) => {
+            const responses = availabilities.filter((a) => a.participantId === p.id);
+            let ok = 0, maybe = 0, ng = 0;
+            for (const r of responses) {
+                if (r.status === 2) ok++;
+                else if (r.status === 1) maybe++;
+                else ng++;
+            }
+            return { ...p, ok, maybe, ng, total: responses.length };
+        });
+    }, [participants, availabilities]);
 
     const onSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -269,10 +282,11 @@ export function AdminEventSettings({
                 </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "edit" | "confirm")} className="w-full">
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "edit" | "confirm" | "participants")} className="w-full">
                 <TabsList>
                     <TabsTrigger value="edit">予定の編集</TabsTrigger>
                     <TabsTrigger value="confirm">予定の確定</TabsTrigger>
+                    <TabsTrigger value="participants">参加者一覧 ({participants.length})</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="edit" className="space-y-2">
@@ -281,9 +295,42 @@ export function AdminEventSettings({
                         <PeriodSelector
                             selectedPeriods={selectedPeriods}
                             onChange={setSelectedPeriods}
-                            busyPeriods={[]}
+                            busyPeriodIds={[]}
                         />
                     </div>
+                </TabsContent>
+
+                <TabsContent value="participants" className="space-y-2">
+                    {participantSummaries.length === 0 ? (
+                        <p className="text-sm text-muted-foreground py-8 text-center">まだ回答者はいません。</p>
+                    ) : (
+                        <div className="rounded-md border overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b bg-muted/50">
+                                        <th className="text-left px-4 py-2 font-medium">名前</th>
+                                        <th className="text-left px-4 py-2 font-medium">メールアドレス</th>
+                                        <th className="text-center px-3 py-2 font-medium text-green-600">○</th>
+                                        <th className="text-center px-3 py-2 font-medium text-amber-500">△</th>
+                                        <th className="text-center px-3 py-2 font-medium text-red-500">×</th>
+                                        <th className="text-left px-4 py-2 font-medium">コメント</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {participantSummaries.map((p) => (
+                                        <tr key={p.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                                            <td className="px-4 py-2 font-medium whitespace-nowrap">{p.name}</td>
+                                            <td className="px-4 py-2 text-muted-foreground">{p.notificationEmail || "—"}</td>
+                                            <td className="text-center px-3 py-2 text-green-600">{p.ok}</td>
+                                            <td className="text-center px-3 py-2 text-amber-500">{p.maybe}</td>
+                                            <td className="text-center px-3 py-2 text-red-500">{p.ng}</td>
+                                            <td className="px-4 py-2 text-muted-foreground max-w-xs truncate">{p.comment || "—"}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
                 </TabsContent>
 
                 <TabsContent value="confirm" className="space-y-2">

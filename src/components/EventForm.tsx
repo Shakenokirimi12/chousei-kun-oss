@@ -6,9 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { PeriodSelector, CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/PeriodSelector";
-import { Loader2, Calendar as CalendarIcon, Check, Copy, ExternalLink, ArrowRight, ArrowLeft } from "lucide-react";
+import { Loader2, Calendar as CalendarIcon, Check, Copy, ExternalLink, ArrowRight, ArrowLeft, Sparkles, X as XIcon } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
+import { cn } from "@/lib/utils";
+import { useCopy } from "@/hooks/useCopy";
+
 import {
     Dialog,
     DialogContent,
@@ -21,7 +24,85 @@ import {
 
 import dynamic from 'next/dynamic';
 
-const CampusSquareImport = dynamic(() => import('@/components/CampusSquareImport'), { ssr: false });
+const AISchedulingAssistant = dynamic(() => import('@/components/AISchedulingAssistant'), { ssr: false });
+const CalendarImportMenu = dynamic(() => import('@/components/CalendarImportMenu'), { ssr: false });
+
+/** カレンダー取り込み元の予定（iCal / Google など由来でフィールド名が揺れるため両対応） */
+type CalendarBusyEvent = {
+    dtstart?: string | Date;
+    dtend?: string | Date;
+    start?: string | Date;
+    end?: string | Date;
+};
+
+/**
+ * 共有用 URL のカード。コピー結果をボタン上でインライン表示する。
+ * 成功 → Check + "コピーしました"、失敗 → X + "コピーできませんでした"。
+ */
+function UrlShareCard({
+    step,
+    color,
+    title,
+    url,
+    hint,
+}: {
+    step: number;
+    color: "primary" | "orange";
+    title: string;
+    url: string;
+    hint: string;
+}) {
+    const { copied, error, copy } = useCopy();
+    const accent =
+        color === "primary"
+            ? "text-primary"
+            : "text-orange-500";
+    const badgeBg =
+        color === "primary"
+            ? "bg-primary text-primary-foreground"
+            : "bg-orange-500 text-white";
+    return (
+        <div className="p-4 rounded-xl border bg-background/50 space-y-3">
+            <h4 className={cn("font-bold flex items-center gap-2", accent)}>
+                <span className={cn("flex items-center justify-center w-6 h-6 rounded-full text-xs", badgeBg)}>{step}</span>
+                {title}
+            </h4>
+            <div className="flex gap-2">
+                <Input value={url} readOnly className="bg-muted/50" />
+                <Button
+                    size="sm"
+                    variant={copied ? "default" : "outline"}
+                    onClick={() => copy(url)}
+                    aria-label="URLをコピー"
+                    aria-live="polite"
+                    className={cn(
+                        "gap-2 min-w-[120px] transition-colors",
+                        copied && "bg-emerald-600 hover:bg-emerald-600 text-white",
+                        error && "border-red-500 text-red-600",
+                    )}
+                >
+                    {copied ? (
+                        <>
+                            <Check className="h-4 w-4" />
+                            コピー済み
+                        </>
+                    ) : error ? (
+                        <>
+                            <XIcon className="h-4 w-4" />
+                            失敗
+                        </>
+                    ) : (
+                        <>
+                            <Copy className="h-4 w-4" />
+                            コピー
+                        </>
+                    )}
+                </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">{hint}</p>
+        </div>
+    );
+}
 
 export function EventForm() {
     const router = useRouter();
@@ -63,24 +144,22 @@ export function EventForm() {
         window.addEventListener("beforeunload", handleBeforeUnload);
         return () => window.removeEventListener("beforeunload", handleBeforeUnload);
     }, [selectedPeriods, title]);
-    const [universityBusyPeriods, setUniversityBusyPeriods] = React.useState<string[]>([]);
-    const [googleData, setGoogleData] = React.useState<{ calendars: any[], events: any[] } | null>(null);
-    const [selectedCalendarIds, setSelectedCalendarIds] = React.useState<string[]>([]);
 
-    const mapEventsToPeriods = React.useCallback((events: any[], filterIds?: string[]) => {
+    const [universityBusyEvents, setUniversityBusyEvents] = React.useState<{ start: string; end: string; summary: string }[]>([]);
+
+    const mapEventsToPeriods = React.useCallback((events: CalendarBusyEvent[]) => {
         const newBusyPeriods: string[] = [];
-        const filteredEvents = filterIds ? events.filter(e => filterIds.includes(e.calendarId)) : events;
 
-        filteredEvents.forEach(event => {
-            const startDate = new Date(event.dtstart || event.start);
-            const endDate = new Date(event.dtend || event.end);
+        events.forEach(event => {
+            const startDate = new Date(event.dtstart || event.start || "");
+            const endDate = new Date(event.dtend || event.end || "");
             const dateStr = startDate.toISOString().split("T")[0];
 
             const checkOverlap = (startA: Date, endA: Date, startB: Date, endB: Date) => {
                 return startA < endB && endA > startB;
             }
 
-            CUSTOM_PERIODS.forEach((p: any) => {
+            CUSTOM_PERIODS.forEach((p) => {
                 const [startH, startM] = p.time.split("-")[0].split(":").map(Number);
                 const [endH, endM] = p.time.split("-")[1].split(":").map(Number);
 
@@ -105,21 +184,17 @@ export function EventForm() {
                     newBusyPeriods.push(`${dateStr}_H${h.id}`);
                 }
             });
-
         });
         return [...new Set(newBusyPeriods)];
     }, []);
 
-    const busyPeriods = React.useMemo(() => {
-        const googleBusy = googleData ? mapEventsToPeriods(googleData.events, selectedCalendarIds) : [];
-        return [...new Set([...universityBusyPeriods, ...googleBusy])];
-    }, [universityBusyPeriods, googleData, selectedCalendarIds, mapEventsToPeriods]);
-    const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const busyPeriodIds = React.useMemo(() => {
+        return mapEventsToPeriods(universityBusyEvents);
+    }, [universityBusyEvents, mapEventsToPeriods]);
 
-    // Import Dialog State
+    const [isSubmitting, setIsSubmitting] = React.useState(false);
     const ENABLE_CAMPUS_SQUARE = process.env.NEXT_PUBLIC_ENABLE_CAMPUS_SQUARE === 'true';
 
-    // Feedback Dialog State
     const [feedback, setFeedback] = React.useState<{ title: string; message: string; isOpen: boolean }>({
         title: "",
         message: "",
@@ -143,9 +218,21 @@ export function EventForm() {
         }
 
         const data = await res.json() as { events: { dtstart: string, dtend: string, summary: string }[] };
-        const newBusyPeriods = mapEventsToPeriods(data.events);
+        const newEvents = data.events.map(ev => ({
+            start: ev.dtstart,
+            end: ev.dtend,
+            summary: ev.summary || "予定あり"
+        }));
 
-        setUniversityBusyPeriods(prev => [...new Set([...prev, ...newBusyPeriods])]);
+        setUniversityBusyEvents(prev => {
+            const next = [...prev];
+            newEvents.forEach(ne => {
+                if (!next.some(p => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+                    next.push(ne);
+                }
+            });
+            return next;
+        });
         setFeedback({
             title: "インポート成功",
             message: `${data.events.length}件の予定をインポートしました。これらは赤色で表示されます。`,
@@ -153,39 +240,111 @@ export function EventForm() {
         });
     }
 
-    React.useEffect(() => {
-        const handleMessage = (event: MessageEvent) => {
-            if (event.data && event.data.type === 'GOOGLE_CALENDAR_EVENTS') {
-                const gasData = event.data.data;
-                setGoogleData(gasData);
-                // 最初は全カレンダーを選択状態にする
-                const allIds = gasData.calendars.map((c: any) => c.id);
-                setSelectedCalendarIds(allIds);
+    const handleICalImport = async (url: string) => {
+        try {
+            const res = await fetch("/api/sync-ical", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url }),
+            });
 
-                setFeedback({
-                    title: "Googleカレンダー連携成功",
-                    message: `${gasData.calendars.length}個のカレンダーから計${gasData.events.length}件の予定を同期しました。下のリストから表示・非表示を切り替えられます。`,
-                    isOpen: true
-                });
+            if (!res.ok) {
+                const error = await res.json() as { error: string };
+                throw new Error(error.error || "インポートに失敗しました");
             }
-        };
 
-        window.addEventListener('message', handleMessage);
-        return () => window.removeEventListener('message', handleMessage);
-    }, []);
+            const data = await res.json() as { events: { dtstart: string, dtend: string }[] };
+            const newEvents = data.events.map(ev => ({
+                start: ev.dtstart,
+                end: ev.dtend,
+                summary: (ev as any).summary || "予定あり"
+            }));
 
-    const toggleCalendar = (id: string) => {
-        setSelectedCalendarIds(prev =>
-            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-        );
-    };
+            setUniversityBusyEvents(prev => {
+                const next = [...prev];
+                newEvents.forEach(ne => {
+                    if (!next.some(p => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+                        next.push(ne);
+                    }
+                });
+                return next;
+            });
+            setFeedback({
+                title: "インポート成功",
+                message: `${data.events.length}件の予定をインポートしました。これらは赤色で表示されます。`,
+                isOpen: true
+            });
+        } catch (error: any) {
+            setFeedback({
+                title: "エラー",
+                message: error.message || "インポートに失敗しました",
+                isOpen: true
+            });
+        }
+    }
 
-    const handleGoogleImport = () => {
-        const gasUrl = "https://script.google.com/macros/s/AKfycbxNI455hdkBLblowRBy00ok0VuF445oz60c8lCqvsUWN4v4H8SIclThLwXw9IDZoi6X/exec";
-        window.open(gasUrl, "GoogleCalendarSync", "width=600,height=800");
-    };
+    const [isGoogleImporting, setIsGoogleImporting] = React.useState(false);
 
+    const handleGoogleImport = React.useCallback(async () => {
+        setIsGoogleImporting(true);
+        try {
+            const res = await fetch("/api/google/calendar/events");
+            if (res.status === 401) {
+                const url = new URL(window.location.href);
+                const returnTo = encodeURIComponent(url.pathname + url.search);
+                window.location.href = `/api/google/auth/start?returnTo=${returnTo}`;
+                return;
+            }
+            if (!res.ok) {
+                setFeedback({
+                    title: "連携エラー",
+                    message: "Googleカレンダーの取得に失敗しました。",
+                    isOpen: true,
+                });
+                return;
+            }
+            const data = (await res.json()) as { events: { dtstart: string; dtend: string; summary?: string }[] };
+            const newEvents = data.events.map(ev => ({
+                start: ev.dtstart,
+                end: ev.dtend,
+                summary: ev.summary || "予定あり"
+            }));
 
+            setUniversityBusyEvents(prev => {
+                const next = [...prev];
+                newEvents.forEach(ne => {
+                    if (!next.some(p => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+                        next.push(ne);
+                    }
+                });
+                return next;
+            });
+            setFeedback({
+                title: "インポート成功",
+                message: `${data.events.length}件の予定をインポートしました。これらは赤色で表示されます。`,
+                isOpen: true
+            });
+        } catch (e) {
+            console.error(e);
+            setFeedback({
+                title: "エラー",
+                message: "Googleカレンダーのインポート中にエラーが発生しました。",
+                isOpen: true,
+            });
+        } finally {
+            setIsGoogleImporting(false);
+        }
+    }, [mapEventsToPeriods]);
+
+    React.useEffect(() => {
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("googleOAuth") !== "1") return;
+
+        handleGoogleImport().finally(() => {
+            url.searchParams.delete("googleOAuth");
+            window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+        });
+    }, [handleGoogleImport]);
 
     const [createdEventId, setCreatedEventId] = React.useState<string | null>(null);
 
@@ -195,7 +354,6 @@ export function EventForm() {
 
         setIsSubmitting(true);
         try {
-            // Sort candidates
             const sortedCandidates = [...selectedPeriods].sort((a, b) => {
                 const [dateA, slotA] = a.split("_");
                 const [dateB, slotB] = b.split("_");
@@ -204,14 +362,14 @@ export function EventForm() {
                 const getStartTime = (slot: string) => {
                     if (slot.startsWith("P")) {
                         const id = parseInt(slot.substring(1));
-                        const p = CUSTOM_PERIODS.find((x: any) => x.id === id);
+                        const p = CUSTOM_PERIODS.find((x) => x.id === id);
                         return p ? p.time.split("-")[0] : "00:00";
                     } else if (slot.startsWith("H")) {
                         const id = parseInt(slot.substring(1));
                         return `${id.toString().padStart(2, '0')}:00`;
                     } else {
                         const id = parseInt(slot);
-                        const p = CUSTOM_PERIODS.find((x: any) => x.id === id);
+                        const p = CUSTOM_PERIODS.find((x) => x.id === id);
                         return p ? p.time.split("-")[0] : "00:00";
                     }
                 }
@@ -230,7 +388,6 @@ export function EventForm() {
             setCreatedEventId(data.id);
             localStorage.removeItem(DRAFT_KEY);
             setIsModalOpen(false);
-            // router.push(`/${data.id}`); // Removed to show success UI
         } catch (error) {
             console.error(error);
             setFeedback({
@@ -243,9 +400,7 @@ export function EventForm() {
         }
     };
 
-
-
-    // ... existing code ...
+    const [isAIPaneOpen, setIsAIPaneOpen] = React.useState(false);
 
     if (createdEventId) {
         const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
@@ -253,14 +408,8 @@ export function EventForm() {
         const resultsUrl = `${baseUrl}/${createdEventId}/results`;
         const adminUrl = `${baseUrl}/${createdEventId}/admin`;
 
-        const copyToClipboard = (text: string, label: string) => {
-            navigator.clipboard.writeText(text);
-            setFeedback({
-                title: "コピーしました",
-                message: `${label}をクリップボードにコピーしました。`,
-                isOpen: true
-            });
-        };
+        // 旧実装はモーダル(setFeedback)でコピー成功を通知していたが画面を遮るため、
+        // 各 URL ボタンに inline で状態を持たせるよう変更した（下記 UrlShareCard）。
 
         return (
             <div className="w-full animate-in fade-in zoom-in-95 duration-500">
@@ -274,47 +423,27 @@ export function EventForm() {
                     </CardHeader>
                     <CardContent className="space-y-6 pt-6">
                         <div className="space-y-4">
-                            <div className="p-4 rounded-xl border bg-background/50 space-y-3">
-                                <h4 className="font-bold flex items-center gap-2 text-primary">
-                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs">1</span>
-                                    回答用 URL (参加者に共有)
-                                </h4>
-                                <div className="flex gap-2">
-                                    <Input value={participantUrl} readOnly className="bg-muted/50" />
-                                    <Button size="icon" variant="outline" onClick={() => copyToClipboard(participantUrl, "回答用URL")}>
-                                        <Copy className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                                <p className="text-[10px] text-muted-foreground">参加者が日程を回答するためのURLです。SNSやメールで共有してください。</p>
-                            </div>
-
-                            <div className="p-4 rounded-xl border bg-background/50 space-y-3">
-                                <h4 className="font-bold flex items-center gap-2 text-orange-500">
-                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-orange-500 text-white text-xs">2</span>
-                                    結果確認 URL (参加者向け)
-                                </h4>
-                                <div className="flex gap-2">
-                                    <Input value={resultsUrl} readOnly className="bg-muted/50" />
-                                    <Button size="icon" variant="outline" onClick={() => copyToClipboard(resultsUrl, "結果確認URL")}>
-                                        <Copy className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                                <p className="text-[10px] text-muted-foreground">回答状況を公開して確認するためのURLです。</p>
-                            </div>
-
-                            <div className="p-4 rounded-xl border bg-background/50 space-y-3">
-                                <h4 className="font-bold flex items-center gap-2 text-orange-500">
-                                    <span className="flex items-center justify-center w-6 h-6 rounded-full bg-orange-500 text-white text-xs">3</span>
-                                    管理用 URL (あなた専用)
-                                </h4>
-                                <div className="flex gap-2">
-                                    <Input value={adminUrl} readOnly className="bg-muted/50" />
-                                    <Button size="icon" variant="outline" onClick={() => copyToClipboard(adminUrl, "管理用URL")}>
-                                        <Copy className="h-4 w-4" />
-                                    </Button>
-                                </div>
-                                <p className="text-[10px] text-muted-foreground">回答状況を確認し、最終日程を決定するためのプライベートなURLです。</p>
-                            </div>
+                            <UrlShareCard
+                                step={1}
+                                color="primary"
+                                title="回答用 URL (参加者に共有)"
+                                url={participantUrl}
+                                hint="参加者が日程を回答するためのURLです。SNSやメールで共有してください。"
+                            />
+                            <UrlShareCard
+                                step={2}
+                                color="orange"
+                                title="結果確認 URL (参加者向け)"
+                                url={resultsUrl}
+                                hint="回答状況を公開して確認するためのURLです。"
+                            />
+                            <UrlShareCard
+                                step={3}
+                                color="orange"
+                                title="管理用 URL (あなた専用)"
+                                url={adminUrl}
+                                hint="回答状況を確認し、最終日程を決定するためのプライベートなURLです。"
+                            />
                         </div>
                     </CardContent>
                     <CardFooter className="flex flex-col gap-3 pb-8">
@@ -335,54 +464,73 @@ export function EventForm() {
     }
 
     return (
-        <div className="w-full max-w-none mx-auto flex-1 min-h-0 flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="mb-2 sm:mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center shrink-0 gap-4">
-                <div className="text-left flex items-center gap-4">
-                    <div>
-                        <h2 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-                            {siteConfig.ui.createEvent.title}
-                        </h2>
-                        <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-                            {siteConfig.ui.createEvent.description}
-                        </p>
-                    </div>
-                </div>
-
-                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    <Button
-                        type="button"
-                        onClick={() => setIsModalOpen(true)}
-                        disabled={selectedPeriods.length === 0}
-                        size="sm"
-                        className="shadow-sm"
-                    >
-                        次へ (詳細を設定) <ArrowRight className="ml-2 h-4 w-4" />
-                    </Button>
-                </div>
-            </div>
-
-            <div className="flex-1 min-h-0 relative w-full flex flex-col">
-                <div className="space-y-2 shrink-0 pb-2 top-0 bg-background/95 backdrop-blur z-10">
-                    <div className="flex justify-between items-end flex-wrap gap-2">
-                        <label className="text-xs font-medium leading-none shrink-0 text-muted-foreground">
-                            候補日程の選択
-                        </label>
-                        <div className="flex gap-2">
-                            {ENABLE_CAMPUS_SQUARE && (
-                                <CampusSquareImport onImport={handleCampusSquareImport} />
-                            )}
+        <div className="w-full max-w-none mx-auto flex-1 min-h-0 flex overflow-hidden">
+            <div className={cn("flex-1 flex flex-col min-w-0 p-4 lg:p-6 transition-all duration-300", isAIPaneOpen ? "lg:mr-0" : "")}>
+                <div className="mb-2 sm:mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center shrink-0 gap-4">
+                    <div className="text-left flex items-center gap-4">
+                        <div>
+                            <h2 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+                                {siteConfig.ui.createEvent.title}
+                            </h2>
+                            <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                                {siteConfig.ui.createEvent.description}
+                            </p>
                         </div>
                     </div>
+
+                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                        <Button
+                            type="button"
+                            onClick={() => setIsModalOpen(true)}
+                            disabled={selectedPeriods.length === 0}
+                            size="sm"
+                            className="shadow-sm"
+                        >
+                            次へ (詳細を設定) <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                    </div>
                 </div>
 
-                <div className="flex-1 min-h-0 relative bg-transparent sm:bg-card/10 sm:border rounded-lg overflow-hidden flex flex-col">
-                    <PeriodSelector
-                        selectedPeriods={selectedPeriods}
-                        onChange={setSelectedPeriods}
-                        busyPeriods={busyPeriods}
-                    />
+                <div className="flex-1 min-h-0 relative w-full flex flex-col">
+                    <div className="space-y-2 shrink-0 pb-2 top-0 bg-background/95 backdrop-blur z-10">
+                        <div className="flex justify-between items-end flex-wrap gap-2">
+                            <label className="text-xs font-medium leading-none shrink-0 text-muted-foreground">
+                                候補日程の選択
+                            </label>
+                        <div className="flex gap-2 flex-wrap items-center">
+                            <CalendarImportMenu
+                                triggerLabel="自分の予定で候補をプレビュー"
+                                title="自分の予定を取り込む"
+                                description="自分の予定が入っている時間帯がカレンダー上で赤くハイライトされ、候補に選ばないよう避けやすくなります。"
+                                enableCampusSquare={ENABLE_CAMPUS_SQUARE}
+                                onGoogleImport={handleGoogleImport}
+                                onGoogleImportLoading={isGoogleImporting}
+                                onCampusImport={handleCampusSquareImport}
+                                onICalImport={handleICalImport}
+                            />
+                        </div>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 min-h-0 relative bg-transparent sm:bg-card/10 sm:border rounded-lg overflow-hidden flex flex-col">
+                        <PeriodSelector
+                            selectedPeriods={selectedPeriods}
+                            onChange={setSelectedPeriods}
+                            busyPeriodIds={busyPeriodIds}
+                            busyEvents={universityBusyEvents}
+                        />
+                    </div>
                 </div>
             </div>
+
+            <AISchedulingAssistant 
+                currentSchedule={selectedPeriods}
+                onChange={setSelectedPeriods}
+                mode="create"
+                isOpen={isAIPaneOpen}
+                onOpen={() => setIsAIPaneOpen(true)}
+                onClose={() => setIsAIPaneOpen(false)}
+            />
 
             {/* Input Modal */}
             <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
@@ -405,6 +553,7 @@ export function EventForm() {
                                     value={title}
                                     onChange={(e) => setTitle(e.target.value)}
                                     required
+                                    maxLength={200}
                                     className="text-lg py-6 bg-background/50 backdrop-blur-sm"
                                 />
                             </div>
@@ -429,11 +578,12 @@ export function EventForm() {
                                 <Input
                                     id="adminPassword"
                                     type="password"
-                                    placeholder="6文字以上"
+                                    placeholder="8文字以上"
                                     value={adminPassword}
                                     onChange={(e) => setAdminPassword(e.target.value)}
                                     required
-                                    minLength={6}
+                                    minLength={8}
+                                    maxLength={256}
                                     className="bg-background/50 backdrop-blur-sm"
                                 />
                                 <p className="text-xs text-muted-foreground">管理画面の閲覧に必要です。忘れないようにしてください。</p>
@@ -445,7 +595,7 @@ export function EventForm() {
                             </Button>
                             <Button
                                 type="submit"
-                                disabled={!title || adminPassword.length < 6 || isSubmitting}
+                                disabled={!title.trim() || adminPassword.length < 8 || isSubmitting}
                                 className="w-full sm:w-auto shadow-lg shadow-primary/20"
                             >
                                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

@@ -30,13 +30,15 @@ export const HOURLY_SLOTS = Array.from({ length: 24 }, (_, i) => {
 interface PeriodSelectorProps {
     selectedPeriods: string[]; // Format: "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
     onChange: (periods: string[]) => void;
-    busyPeriods?: string[]; // Format: "YYYY-MM-DD_P#" or "YYYY-MM-DD_H#"
+    busyPeriodIds?: string[]; 
+    busyEvents?: { start: string; end: string; summary: string }[];
 }
 
 export function PeriodSelector({
     selectedPeriods,
     onChange,
-    busyPeriods = []
+    busyPeriodIds = [],
+    busyEvents = []
 }: PeriodSelectorProps) {
     const deriveDatesFromPeriods = React.useCallback((periods: string[]) => {
         const datesMap = new Map<string, Date>();
@@ -64,6 +66,25 @@ export function PeriodSelector({
     // Hourly range picker state (defaults: 9:00 - 17:00)
     const [rangeStart, setRangeStart] = React.useState("09:00");
     const [rangeEnd, setRangeEnd] = React.useState("17:00");
+
+    // Synchronize viewDates with selectedPeriods (for AI additions)
+    React.useEffect(() => {
+        const derivedDates = deriveDatesFromPeriods(selectedPeriods);
+        setViewDates(prev => {
+            const next = [...prev];
+            let changed = false;
+            derivedDates.forEach(dd => {
+                if (!next.some(d => format(d, "yyyy-MM-dd") === format(dd, "yyyy-MM-dd"))) {
+                    next.push(dd);
+                    changed = true;
+                }
+            });
+            if (changed) {
+                return next.sort((a, b) => a.getTime() - b.getTime());
+            }
+            return prev;
+        });
+    }, [selectedPeriods, deriveDatesFromPeriods]);
 
     // Handle date selection from Calendar
     const onSelectDates = (dates: Date[] | undefined) => {
@@ -345,7 +366,7 @@ export function PeriodSelector({
                                                 const [_, pId] = id.split("_P");
                                                 toggleFocusedPeriod(Number(pId), "P");
                                             }}
-                                            busyPeriods={busyPeriods}
+                                            busyPeriodIds={busyPeriodIds}
                                         />
                                     </div>
                                 )}
@@ -405,18 +426,18 @@ export function PeriodSelector({
             </div>
 
             {/* Right Main Area: Timeline */}
-            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-full">
-                <ScrollArea className="flex-1 w-full h-full overscroll-contain">
-                    {/* Container for the specific scroll content */}
-                    <div className="flex flex-col min-w-full pb-48">
+            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-full overflow-hidden">
 
+                <ScrollArea className="flex-1 w-full h-full overscroll-contain">
+                    {/* Horizontal Scroll Wrapper */}
+                    <div className="min-w-full w-fit">
                         {/* 1. Header Row (Sticky Top) */}
-                        <div className="sticky top-0 z-40 flex border-b bg-background w-full min-w-max">
+                        <div className="sticky top-0 z-40 flex border-b bg-background w-full">
                             {/* Corner Spacer (Sticky Left) */}
                             <div className="sticky left-0 z-50 w-12 flex-shrink-0 border-r bg-background" />
 
-                            {/* Date Headers */}
-                            <div className="flex flex-1">
+                            {/* Date Headers Container */}
+                            <div className="flex flex-1 min-w-0">
                                 {viewDates.length === 0 ? (
                                     <div className="flex-1 p-4 text-sm text-muted-foreground italic whitespace-nowrap">
                                         日付が選択されていません
@@ -429,7 +450,7 @@ export function PeriodSelector({
                                                 key={date.toISOString()}
                                                 onClick={() => setFocusedDate(date)}
                                                 className={cn(
-                                                    "flex-1 border-r min-w-[120px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-16 group/header",
+                                                    "flex-none border-r w-[120px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-16 group/header",
                                                     isFocused
                                                         ? "bg-primary/10 text-primary border-b-2 border-b-primary"
                                                         : "bg-background/50 hover:bg-muted/50 text-muted-foreground"
@@ -455,12 +476,14 @@ export function PeriodSelector({
                                         )
                                     })
                                 )}
+                                {/* Final Column Buffer for Side Tab */}
+                                <div className="flex-none w-12 border-transparent" />
                             </div>
                         </div>
 
                         {/* 2. Timeline Body */}
                         <div
-                            className="flex relative min-w-max"
+                            className="flex relative w-full"
                             style={{ height: `${(END_HOUR - START_HOUR) * 60 * PIXELS_PER_MINUTE}px` }}
                         >
                             {/* Time Axis (Sticky Left) */}
@@ -469,7 +492,7 @@ export function PeriodSelector({
                             </div>
 
                             {/* Grid & Columns */}
-                            <div className="flex-1 flex relative">
+                            <div className="flex flex-1 min-w-0">
                                 {renderGridLines()}
 
                                 {viewDates.map(date => {
@@ -481,7 +504,7 @@ export function PeriodSelector({
                                             key={dateStr}
                                             onClick={() => setFocusedDate(date)}
                                             className={cn(
-                                                "flex-1 border-r relative min-w-[120px] group/col transition-colors",
+                                                "flex-none border-r w-[120px] relative group/col transition-colors",
                                                 isFocused ? "bg-primary/5" : ""
                                             )}
                                         >
@@ -491,54 +514,46 @@ export function PeriodSelector({
                                                 !isFocused && "group-hover/col:bg-muted/10"
                                             )} />
 
-                                            {/* 1. Render Busy Periods (Merged) */}
+                                            {/* 1. Render Busy Periods */}
                                             {(() => {
-                                                const relevantBusy = busyPeriods.filter(p => p.startsWith(dateStr));
+                                                const dayBusy = busyEvents
+                                                    .filter(ev => format(new Date(ev.start), "yyyy-MM-dd") === dateStr)
+                                                    .map(ev => ({
+                                                        startMin: new Date(ev.start).getHours() * 60 + new Date(ev.start).getMinutes(),
+                                                        endMin: (() => {
+                                                            const s = new Date(ev.start);
+                                                            const e = new Date(ev.end);
+                                                            let m = e.getHours() * 60 + e.getMinutes();
+                                                            if (m <= (s.getHours() * 60 + s.getMinutes()) && e.getDate() !== s.getDate()) m = 1440;
+                                                            return m;
+                                                        })(),
+                                                        summary: ev.summary
+                                                    }))
+                                                    .sort((a, b) => a.startMin - b.startMin);
 
-                                                // 1. Convert to ranges
-                                                const ranges: { start: number; end: number }[] = [];
-                                                relevantBusy.forEach(bp => {
-                                                    const [_, slot] = bp.split("_");
-                                                    const type = slot.startsWith("P") ? "P" : "H";
-                                                    const id = parseInt(slot.replace(/[PH]/, ""));
-                                                    const info = getSlotInfo(type, id);
-                                                    if (info) {
-                                                        ranges.push({ start: info.startMin, end: info.endMin });
+                                                const merged: typeof dayBusy = [];
+                                                dayBusy.forEach(curr => {
+                                                    const prev = merged[merged.length - 1];
+                                                    if (prev && prev.summary === curr.summary && curr.startMin <= prev.endMin) {
+                                                        prev.endMin = Math.max(prev.endMin, curr.endMin);
+                                                    } else {
+                                                        merged.push({ ...curr });
                                                     }
                                                 });
 
-                                                // 2. Sort ranges
-                                                ranges.sort((a, b) => a.start - b.start);
-
-                                                // 3. Merge ranges
-                                                const merged: { start: number; end: number }[] = [];
-                                                if (ranges.length > 0) {
-                                                    let current = ranges[0];
-                                                    for (let i = 1; i < ranges.length; i++) {
-                                                        const next = ranges[i];
-                                                        if (next.start < current.end) {
-                                                            // Overlap or adjacent -> merge
-                                                            current.end = Math.max(current.end, next.end);
-                                                        } else {
-                                                            // No overlap -> push current, start new
-                                                            merged.push(current);
-                                                            current = next;
-                                                        }
-                                                    }
-                                                    merged.push(current);
-                                                }
-
-                                                // 4. Render merged blocks
-                                                return merged.map((range, i) => {
-                                                    const style = getBlockStyle(range.start, range.end);
+                                                return merged.map((ev, i) => {
+                                                    const style = getBlockStyle(ev.startMin, ev.endMin);
                                                     return (
                                                         <div
-                                                            key={`busy-merged-${i}`}
-                                                            className="absolute inset-x-1 rounded px-2 py-1 text-[10px] sm:text-xs font-medium border overflow-hidden
-                                                                       bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400 border-red-200 dark:border-red-800/50 z-10 pointer-events-none"
+                                                            key={`busy-${i}`}
+                                                            className="absolute inset-x-1 rounded px-1 py-0.5 text-xs font-bold border overflow-hidden flex items-center justify-center
+                                                                       bg-red-100/60 dark:bg-red-900/30 text-red-600 dark:text-red-400 border-red-200/50 dark:border-red-800/50 z-10 pointer-events-none"
                                                             style={style}
+                                                            title={ev.summary}
                                                         >
-                                                            <span className="font-bold opacity-70">予定あり</span>
+                                                            <span className="truncate w-full text-center opacity-70">
+                                                                {ev.summary}
+                                                            </span>
                                                         </div>
                                                     );
                                                 });
@@ -561,7 +576,7 @@ export function PeriodSelector({
                                                             e.stopPropagation();
                                                             togglePeriod(dateStr, id, type);
                                                         }}
-                                                        className="absolute inset-x-1 rounded px-2 py-1 text-[10px] sm:text-xs font-medium border cursor-pointer
+                                                        className="absolute inset-x-1 rounded px-2 py-1 text-xs sm:text-xs font-medium border cursor-pointer
                                                                    shadow-sm hover:shadow-md transition-all z-20 overflow-hidden
                                                                    bg-primary text-primary-foreground border-primary"
                                                         style={style}
@@ -642,7 +657,7 @@ export function PeriodSelector({
                         >
                             <ZoomOut className="w-4 h-4" />
                         </Button>
-                        <span className="text-[10px] w-8 text-center font-medium">
+                        <span className="text-xs w-8 text-center font-medium">
                             {Math.round(zoomLevel * 100 / 1.2)}%
                         </span>
                         <Button

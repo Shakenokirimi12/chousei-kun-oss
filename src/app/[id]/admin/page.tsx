@@ -48,7 +48,12 @@ export default async function AdminPage({ params }: { params: Promise<{ id: stri
           initialDescription={event.description ?? ""}
           initialCandidates={event.candidates}
           initialConfirmedCandidateIdx={event.confirmedCandidateIdx ?? null}
-          participants={participants}
+          participants={participants.map((p) => ({
+            id: p.id,
+            name: p.name,
+            comment: p.comment,
+            notificationEmail: p.notificationEmail,
+          }))}
           availabilities={availabilities}
         />
       </div>

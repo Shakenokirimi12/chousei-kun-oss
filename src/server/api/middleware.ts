@@ -1,8 +1,9 @@
-import type { Context, Next } from "hono";
+import type { Context } from "hono";
 import { eq } from "drizzle-orm";
 import { createDb } from "@/server/db/client";
 import { events } from "@/server/db/schema";
 import { COOKIE_NAMES, API_ERRORS } from "@/lib/constants";
+import { timingSafeEqual } from "@/lib/admin-auth";
 
 type Bindings = {
     DB: D1Database;
@@ -28,7 +29,7 @@ export async function verifyAdminSession(
         },
     });
 
-    if (!event?.adminAccessToken || sessionToken !== event.adminAccessToken) {
+    if (!event?.adminAccessToken || !timingSafeEqual(sessionToken, event.adminAccessToken)) {
         return { authorized: false, error: API_ERRORS.UNAUTHORIZED };
     }
 
