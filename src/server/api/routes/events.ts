@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { sValidator } from "@hono/standard-validator";
 import { eq } from "drizzle-orm";
 import { createPasswordHash, verifyPassword } from "@/lib/admin-auth";
-import { createDb } from "@/server/db/client";
+import { createDb, type DbClient } from "@/server/db/client";
 import { availabilities, events, participants } from "@/server/db/schema";
 import {
     createEventSchema,
@@ -23,6 +23,9 @@ import {
 } from "../utils";
 import { verifyAdminSession } from "../middleware";
 import { enforceRateLimit, clientIp, type RateLimitBinding } from "../rate-limit";
+import { safeJsonParse } from "@/lib/safe-json";
+import { redactPii } from "@/lib/redact";
+import { encryptPii, decryptPii } from "@/lib/pii-crypto";
 
 type Bindings = {
     DB: D1Database;
@@ -30,6 +33,44 @@ type Bindings = {
 };
 
 export const eventsRoutes = new Hono<{ Bindings: Bindings }>();
+
+/**
+ * 既存参加者の availability を新しい入力で取り替える。delete→insert を
+ * D1 の batch() に乗せて単一 RPC で実行することで、片方だけ成功する
+ * 部分失敗を防ぐ。バインドパラメータの上限を踏まえ insert はチャンク分け。
+ */
+const REPLACE_AVAILABILITY_CHUNK = 50; // 1 行 4 カラム → 200 binds < D1 上限
+async function replaceAvailabilities(
+    d1: D1Database,
+    db: DbClient,
+    participantId: string,
+    statuses: number[]
+): Promise<void> {
+    const statements: D1PreparedStatement[] = [];
+    statements.push(
+        d1.prepare("DELETE FROM availabilities WHERE participant_id = ?").bind(participantId)
+    );
+    if (statuses.length > 0) {
+        for (let i = 0; i < statuses.length; i += REPLACE_AVAILABILITY_CHUNK) {
+            const chunk = statuses.slice(i, i + REPLACE_AVAILABILITY_CHUNK);
+            const placeholders = chunk.map(() => "(?, ?, ?, ?)").join(", ");
+            const binds: (string | number)[] = [];
+            chunk.forEach((status, k) => {
+                binds.push(crypto.randomUUID(), participantId, i + k, status);
+            });
+            statements.push(
+                d1.prepare(
+                    `INSERT INTO availabilities (id, participant_id, candidate_idx, status) VALUES ${placeholders}`
+                ).bind(...binds)
+            );
+        }
+    }
+    await d1.batch(statements);
+    // Drizzle 経由ではなく直接 d1.prepare を使っているので、Drizzle のキャッシュは
+    // 別経路。db 引数は将来的にトランザクション API 移行する際の差し替えポイント。
+    void db;
+}
+
 
 eventsRoutes.post("/", sValidator("json", createEventSchema), async (c) => {
     const db = createDb(c.env.DB);
@@ -91,12 +132,22 @@ eventsRoutes.get("/:id", sValidator("param", eventIdParamSchema), async (c) => {
             .where(eq(participants.eventId, id)),
     ]);
 
+    // 参加者の name/comment は AES-GCM で暗号化保存されている可能性があるので
+    // 復号して返す。旧来の平文行はそのまま返る。
+    const decryptedParticipants = await Promise.all(
+        participantRows.map(async (p) => ({
+            id: p.id,
+            name: (await decryptPii(p.name)) ?? "",
+            comment: await decryptPii(p.comment),
+        }))
+    );
+
     return c.json({
         event: {
             ...event,
-            candidates: JSON.parse(event.candidates),
+            candidates: safeJsonParse<string[]>(event.candidates, "events.candidates") ?? [],
         },
-        participants: participantRows,
+        participants: decryptedParticipants,
         availabilities: availabilityRows,
     });
 });
@@ -123,10 +174,10 @@ eventsRoutes.get(
             return c.json({ error: "Participant not found" }, 404);
         }
         return c.json({
-            name: row.name,
-            comment: row.comment,
+            name: (await decryptPii(row.name)) ?? "",
+            comment: await decryptPii(row.comment),
             notifyOnFinalize: row.notifyOnFinalize,
-            notificationEmail: row.notificationEmail,
+            notificationEmail: await decryptPii(row.notificationEmail),
         });
     }
 );
@@ -151,6 +202,11 @@ eventsRoutes.post(
         }
         const newParticipantId = participantId ?? crypto.randomUUID();
 
+        // PII は保存時に AES-GCM で暗号化（読み出し側で復号）。
+        const encName = (await encryptPii(name))!;
+        const encComment = await encryptPii(normalizedComment);
+        const encEmail = await encryptPii(normalizedNotificationEmail);
+
         if (participantId) {
             const existing = await db.query.participants.findFirst({
                 where: eq(participants.id, participantId),
@@ -159,37 +215,41 @@ eventsRoutes.post(
             if (!existing || existing.eventId !== eventId) {
                 return c.json({ error: "Participant not found" }, 404);
             }
+            // availability の delete→insert を batch でまとめて原子化する。
+            // 直接 update を batch に混ぜると Drizzle の型整合性が崩れるので
+            // update は先に実行し、availability の取り替えは batch で行う。
             await db
                 .update(participants)
                 .set({
-                    name,
-                    comment: normalizedComment,
+                    name: encName,
+                    comment: encComment,
                     userId: userId ?? null,
                     notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0,
-                    notificationEmail: normalizedNotificationEmail,
+                    notificationEmail: encEmail,
                 })
                 .where(eq(participants.id, participantId));
-            await db.delete(availabilities).where(eq(availabilities.participantId, participantId));
+
+            await replaceAvailabilities(c.env.DB, db, participantId, statuses);
         } else {
             await db.insert(participants).values({
                 id: newParticipantId,
                 eventId,
                 userId: userId ?? null,
-                name,
-                comment: normalizedComment,
+                name: encName,
+                comment: encComment,
                 notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0,
-                notificationEmail: normalizedNotificationEmail,
+                notificationEmail: encEmail,
             });
-        }
 
-        if (statuses.length > 0) {
-            const availabilityValues = statuses.map((status, idx) => ({
-                id: crypto.randomUUID(),
-                participantId: newParticipantId,
-                candidateIdx: idx,
-                status,
-            }));
-            await insertAvailabilitiesInBatches(db, availabilityValues);
+            if (statuses.length > 0) {
+                const availabilityValues = statuses.map((status, idx) => ({
+                    id: crypto.randomUUID(),
+                    participantId: newParticipantId,
+                    candidateIdx: idx,
+                    status,
+                }));
+                await insertAvailabilitiesInBatches(db, availabilityValues);
+            }
         }
 
         return c.json({ success: true, participantId: newParticipantId });
@@ -222,7 +282,7 @@ eventsRoutes.post(
             .update(participants)
             .set({
                 notifyOnFinalize: notifyOnFinalize ? 1 : 0,
-                notificationEmail: normalizedEmail,
+                notificationEmail: await encryptPii(normalizedEmail),
             })
             .where(eq(participants.id, participantId));
 
@@ -265,6 +325,37 @@ eventsRoutes.post(
     }
 );
 
+/**
+ * 管理者: イベントを完全削除（カスケード）。
+ * D1 batch で参加者・回答・本体を一括削除する。GDPR 的な「忘れられる権利」の
+ * ためにも、admin 認証済みの本人が即時に削除できる手段を残しておく。
+ */
+eventsRoutes.delete(
+    "/:id",
+    sValidator("param", eventIdParamSchema),
+    async (c) => {
+        const { id } = c.req.valid("param");
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+
+        await c.env.DB.batch([
+            c.env.DB.prepare(
+                `DELETE FROM availabilities
+                 WHERE participant_id IN (SELECT id FROM participants WHERE event_id = ?)`
+            ).bind(id),
+            c.env.DB.prepare(`DELETE FROM participants WHERE event_id = ?`).bind(id),
+            c.env.DB.prepare(`DELETE FROM events WHERE id = ?`).bind(id),
+        ]);
+
+        // admin cookie もクリア
+        c.header(
+            "Set-Cookie",
+            `chousei_admin_${id}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`
+        );
+        return c.json({ ok: true });
+    }
+);
+
 eventsRoutes.post(
     "/:id/admin-logout",
     sValidator("param", eventIdParamSchema),
@@ -299,7 +390,7 @@ eventsRoutes.patch(
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
 
-        const oldCandidates = JSON.parse(currentEvent.candidates) as string[];
+        const oldCandidates = safeJsonParse<string[]>(currentEvent.candidates, "events.candidates") ?? [];
         const indexMap = new Map<string, number>();
         nextCandidates.forEach((candidate, idx) => {
             indexMap.set(candidate, idx);
@@ -311,11 +402,6 @@ eventsRoutes.patch(
              JOIN participants p ON p.id = a.participant_id
              WHERE p.event_id = ?`
         ).bind(id).all<{ id: string; participant_id: string; candidate_idx: number; status: number }>();
-
-        await c.env.DB.prepare(
-            `DELETE FROM availabilities
-             WHERE participant_id IN (SELECT id FROM participants WHERE event_id = ?)`
-        ).bind(id).run();
 
         const remappedValues: Array<{ id: string; participantId: string; candidateIdx: number; status: number }> = [];
         for (const row of availabilityRows.results) {
@@ -330,18 +416,34 @@ eventsRoutes.patch(
                 status: row.status,
             });
         }
-        if (remappedValues.length > 0) {
-            await insertAvailabilitiesInBatches(db, remappedValues);
-        }
 
-        await db
-            .update(events)
-            .set({
-                title,
-                description: description || null,
-                candidates: JSON.stringify(nextCandidates),
-            })
-            .where(eq(events.id, id));
+        // Drop & re-insert を batch() で原子化。途中失敗で availability が
+        // 消えたまま残るリスクを避ける。
+        const statements: D1PreparedStatement[] = [
+            c.env.DB.prepare(
+                `DELETE FROM availabilities
+                 WHERE participant_id IN (SELECT id FROM participants WHERE event_id = ?)`
+            ).bind(id),
+        ];
+        for (let i = 0; i < remappedValues.length; i += REPLACE_AVAILABILITY_CHUNK) {
+            const chunk = remappedValues.slice(i, i + REPLACE_AVAILABILITY_CHUNK);
+            const placeholders = chunk.map(() => "(?, ?, ?, ?)").join(", ");
+            const binds: (string | number)[] = [];
+            chunk.forEach((row) => {
+                binds.push(row.id, row.participantId, row.candidateIdx, row.status);
+            });
+            statements.push(
+                c.env.DB.prepare(
+                    `INSERT INTO availabilities (id, participant_id, candidate_idx, status) VALUES ${placeholders}`
+                ).bind(...binds)
+            );
+        }
+        statements.push(
+            c.env.DB.prepare(
+                `UPDATE events SET title = ?, description = ?, candidates = ? WHERE id = ?`
+            ).bind(title, description || null, JSON.stringify(nextCandidates), id)
+        );
+        await c.env.DB.batch(statements);
 
         return c.json({ ok: true });
     }
@@ -367,7 +469,7 @@ eventsRoutes.post(
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
 
-        const candidates = JSON.parse(currentEvent.candidates) as string[];
+        const candidates = safeJsonParse<string[]>(currentEvent.candidates, "events.candidates") ?? [];
         if (confirmedCandidateIdx !== null && confirmedCandidateIdx >= candidates.length) {
             return c.json({ error: "Invalid confirmed candidate index" }, 400);
         }
@@ -404,7 +506,7 @@ eventsRoutes.post(
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
 
-        const candidates = JSON.parse(currentEvent.candidates) as string[];
+        const candidates = safeJsonParse<string[]>(currentEvent.candidates, "events.candidates") ?? [];
         if (confirmedCandidateIdx >= candidates.length) {
             return c.json({ error: "Invalid confirmed candidate index" }, 400);
         }
@@ -432,9 +534,16 @@ eventsRoutes.post(
                 notificationEmail: true,
             },
         });
-        const inviteTargets = recipients
-            .filter((p) => p.notifyOnFinalize === 1 && !!p.notificationEmail)
-            .map((p) => ({ name: p.name, email: p.notificationEmail as string }));
+        const inviteTargets = (
+            await Promise.all(
+                recipients
+                    .filter((p) => p.notifyOnFinalize === 1 && !!p.notificationEmail)
+                    .map(async (p) => ({
+                        name: (await decryptPii(p.name)) ?? "",
+                        email: (await decryptPii(p.notificationEmail)) ?? "",
+                    }))
+            )
+        ).filter((t) => t.email.length > 0);
 
         const dedupedAttendees = Array.from(
             new Map(inviteTargets.map((target) => [target.email, target])).values()
@@ -470,7 +579,7 @@ eventsRoutes.post(
 
         if (!insertRes.ok) {
             const errText = await insertRes.text();
-            console.error("[GoogleInvite:error]", errText);
+            console.error("[GoogleInvite:error]", redactPii(errText));
             return c.json({ error: "Failed to add to Google Calendar" }, 500);
         }
 

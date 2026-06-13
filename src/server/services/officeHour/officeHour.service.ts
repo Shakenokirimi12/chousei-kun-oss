@@ -8,6 +8,8 @@ import {
 import type { WeeklyWindow } from "./slotGenerator";
 import { createPasswordHash } from "@/lib/admin-auth";
 import { encryptToken, decryptToken } from "@/lib/token-crypto";
+import { encryptPii, decryptPii } from "@/lib/pii-crypto";
+import { safeJsonParse } from "@/lib/safe-json";
 
 export interface CreateOfficeHourInput {
     title: string;
@@ -26,7 +28,11 @@ export interface CreateOfficeHourInput {
 }
 
 export class OfficeHourService {
-    constructor(private db: DbClient) {}
+    /**
+     * @param d1 atomic 操作（予約 INSERT 等）に必要。route から呼ぶ場合は必須。
+     *   Cron など atomic 予約を行わない呼び出しでは省略可。
+     */
+    constructor(private db: DbClient, private d1?: D1Database) {}
 
     /** 新規 Office Hour を作成。Campus 認証情報は AES-GCM で保存。 */
     async create(input: CreateOfficeHourInput): Promise<{ id: string; adminAccessToken: string }> {
@@ -175,7 +181,7 @@ export class OfficeHourService {
         if (!row) return null;
         return {
             ...row,
-            windows: JSON.parse(row.windows) as WeeklyWindow[],
+            windows: safeJsonParse<WeeklyWindow[]>(row.windows, "office_hours.windows") ?? [],
         };
     }
 
@@ -191,13 +197,16 @@ export class OfficeHourService {
             .where(eq(officeHourHostBusy.officeHourId, officeHourId));
     }
 
-    /** スロット別の予約件数 + 自分の予約。公開ページで使う。 */
+    /**
+     * スロット別の予約件数 + 自分の予約情報。公開ページで使う。
+     * 公開ページでは PII を返したくないので `name` は返さず、自分の予約判定用に
+     * `userId` のみを返す。
+     */
     async getSlotBookings(officeHourId: string) {
         const rows = await this.db
             .select({
                 slotStart: officeHourBookings.slotStart,
                 userId: officeHourBookings.userId,
-                name: officeHourBookings.name,
             })
             .from(officeHourBookings)
             .where(eq(officeHourBookings.officeHourId, officeHourId));
@@ -209,10 +218,16 @@ export class OfficeHourService {
     }
 
     /**
-     * 予約を作成する。Cloudflare D1 はトランザクションが弱いため、
-     * 「自分の重複予約 + 枠定員」をチェック → 同じ batch で insert することで
-     * 競合に対する実用的な安全性を確保する。完全な原子性ではないが、
-     * 同時アクセスでも capacity を超えるケースは極めて稀になる。
+     * 予約を作成する。`INSERT ... SELECT WHERE` で
+     *   - 既に同一ユーザーの予約が同枠にある（duplicate）
+     *   - 枠の現予約数が capacity 以上（slot_full）
+     * の条件を SQL レベルで満たしたときのみ insert される。1 ステートメントで
+     * 完結するため、check-then-insert の TOCTOU をなくして capacity 超過を防ぐ。
+     *
+     * 失敗理由を区別するため、insert で rows_written=0 のときに条件を確認し
+     * duplicate / slot_full を返す。
+     *
+     * PII (name / comment / email) は AES-GCM で暗号化して保存する。
      */
     async book(input: {
         officeHourId: string;
@@ -226,43 +241,69 @@ export class OfficeHourService {
         | { ok: true; bookingId: string }
         | { ok: false; reason: "slot_full" | "duplicate" }
     > {
-        // 既存予約の確認
-        const existing = await this.db
-            .select({ id: officeHourBookings.id, userId: officeHourBookings.userId })
-            .from(officeHourBookings)
-            .where(
-                and(
-                    eq(officeHourBookings.officeHourId, input.officeHourId),
-                    eq(officeHourBookings.slotStart, input.slotStart)
-                )
-            );
-
-        if (input.userId && existing.some((e) => e.userId === input.userId)) {
-            return { ok: false, reason: "duplicate" };
+        if (!this.d1) {
+            throw new Error("OfficeHourService.book requires raw D1 binding");
         }
-        if (existing.length >= input.capacityPerSlot) {
+        const id = crypto.randomUUID();
+        const encName = (await encryptPii(input.name))!;
+        const encComment = await encryptPii(input.comment ?? null);
+        const encEmail = await encryptPii(input.email ?? null);
+        const createdAt = Date.now();
+        const userIdOrNull = input.userId ?? null;
+
+        // 重複ユーザーは別条件で先にチェック（INSERT WHERE で同じ user_id が
+        // 既にあれば slot_full と区別がつかなくなるため）。
+        if (input.userId) {
+            const dup = await this.d1.prepare(
+                `SELECT 1 FROM office_hour_bookings
+                 WHERE office_hour_id = ? AND slot_start = ? AND user_id = ? LIMIT 1`
+            ).bind(input.officeHourId, input.slotStart, input.userId).first();
+            if (dup) return { ok: false, reason: "duplicate" };
+        }
+
+        // capacity チェックを内包した条件付き INSERT。
+        const res = await this.d1.prepare(
+            `INSERT INTO office_hour_bookings
+               (id, office_hour_id, slot_start, name, comment, email, user_id, created_at)
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?
+             WHERE (SELECT COUNT(*) FROM office_hour_bookings
+                    WHERE office_hour_id = ? AND slot_start = ?) < ?`
+        )
+            .bind(
+                id,
+                input.officeHourId,
+                input.slotStart,
+                encName,
+                encComment,
+                encEmail,
+                userIdOrNull,
+                createdAt,
+                input.officeHourId,
+                input.slotStart,
+                input.capacityPerSlot
+            )
+            .run();
+
+        const written = res.meta?.changes ?? 0;
+        if (written === 0) {
             return { ok: false, reason: "slot_full" };
         }
-
-        const id = crypto.randomUUID();
-        await this.db.insert(officeHourBookings).values({
-            id,
-            officeHourId: input.officeHourId,
-            slotStart: input.slotStart,
-            name: input.name,
-            comment: input.comment ?? null,
-            email: input.email ?? null,
-            userId: input.userId ?? null,
-            createdAt: Date.now(),
-        });
         return { ok: true, bookingId: id };
     }
 
     async listBookingsForAdmin(officeHourId: string) {
-        return this.db
+        const rows = await this.db
             .select()
             .from(officeHourBookings)
             .where(eq(officeHourBookings.officeHourId, officeHourId));
+        return Promise.all(
+            rows.map(async (r) => ({
+                ...r,
+                name: (await decryptPii(r.name)) ?? "",
+                comment: await decryptPii(r.comment),
+                email: await decryptPii(r.email),
+            }))
+        );
     }
 
     /** 主催者の busy キャッシュを source 単位で洗い替えする。 */
@@ -310,6 +351,6 @@ export class OfficeHourService {
     }
 }
 
-export function createOfficeHourService(db: DbClient) {
-    return new OfficeHourService(db);
+export function createOfficeHourService(db: DbClient, d1?: D1Database) {
+    return new OfficeHourService(db, d1);
 }

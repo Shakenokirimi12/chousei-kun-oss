@@ -31,6 +31,10 @@ async function getKey(): Promise<CryptoKey | null> {
 
     const raw = process.env.TOKEN_ENC_KEY;
     if (!raw) {
+        if (process.env.NODE_ENV === "production") {
+            // 本番では平文保存にフォールバックさせない。
+            throw new Error("TOKEN_ENC_KEY must be set in production");
+        }
         cachedKey = null;
         return null;
     }

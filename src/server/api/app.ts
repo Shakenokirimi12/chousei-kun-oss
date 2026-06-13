@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sValidator } from "@hono/standard-validator";
-import { eventsRoutes, googleRoutes, usersRoutes, aiRoutes, officeHoursRoutes } from "./routes";
+import { eventsRoutes, googleRoutes, usersRoutes, aiRoutes, officeHoursRoutes, adminRoutes } from "./routes";
 import { syncCalendarSchema, syncICalSchema } from "./schemas";
 import { CampusSquareService } from "@/lib/campus-square";
 import { parseICal } from "@/lib/ical";
@@ -18,6 +18,7 @@ apiApp.route("/google", googleRoutes);
 apiApp.route("/users", usersRoutes);
 apiApp.route("/ai", aiRoutes);
 apiApp.route("/office-hours", officeHoursRoutes);
+apiApp.route("/admin", adminRoutes);
 
 apiApp.post("/sync-calendar", sValidator("json", syncCalendarSchema), async (c) => {
     if (process.env.NEXT_PUBLIC_ENABLE_CAMPUS_SQUARE !== "true") {

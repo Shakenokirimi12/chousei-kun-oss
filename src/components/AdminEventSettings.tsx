@@ -202,6 +202,32 @@ export function AdminEventSettings({
         }
     };
 
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteConfirmText, setDeleteConfirmText] = useState("");
+    const handleDeleteEvent = async () => {
+        if (deleteConfirmText !== title) {
+            setError("確認のためイベントタイトルをそのまま入力してください。");
+            return;
+        }
+        if (!confirm("本当にこのイベントを完全削除しますか？参加者の回答も含めてすべて削除され、復元できません。")) {
+            return;
+        }
+        setError("");
+        setIsDeleting(true);
+        try {
+            const res = await fetch(`/api/events/${eventId}`, { method: "DELETE" });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({})) as { error?: string };
+                throw new Error(data.error || "削除に失敗しました。");
+            }
+            logActivity("イベント削除成功", eventId);
+            router.push("/");
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "削除に失敗しました。");
+            setIsDeleting(false);
+        }
+    };
+
     const confirmCandidate = async (idx: number | null) => {
         logActivity("日程確定開始", idx !== null ? `候補インデックス: ${idx}` : "確定解除");
         setError("");
@@ -393,6 +419,34 @@ export function AdminEventSettings({
                     onAddToGoogleCalendar={addToGoogleCalendar}
                 />
             )}
+
+            {/* 危険な操作: 完全削除 */}
+            <div className="mt-12 rounded-md border border-destructive/40 bg-destructive/5 p-4 space-y-3">
+                <div>
+                    <h3 className="text-sm font-semibold text-destructive">イベントを完全削除</h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                        イベント本体・参加者・回答をすべて削除します。この操作は取り消せません。
+                        確認のため、下にイベントタイトル「{title}」をそのまま入力してください。
+                    </p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                    <Input
+                        value={deleteConfirmText}
+                        onChange={(e) => setDeleteConfirmText(e.target.value)}
+                        placeholder={title}
+                        disabled={isDeleting}
+                        className="sm:max-w-xs"
+                    />
+                    <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={isDeleting || deleteConfirmText !== title}
+                        onClick={handleDeleteEvent}
+                    >
+                        {isDeleting ? "削除中..." : "完全に削除する"}
+                    </Button>
+                </div>
+            </div>
         </form>
     );
 }

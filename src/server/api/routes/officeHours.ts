@@ -16,6 +16,9 @@ import { parseCookieValue, refreshGoogleTokenIfNeeded } from "../utils";
 import { verifyPassword } from "@/lib/admin-auth";
 import { COOKIE_NAMES } from "@/lib/constants";
 import { syncOneOfficeHour } from "@/server/cron/sync-host-busy";
+import { verifyOfficeHourAdminSession } from "../middleware";
+import { safeJsonParse } from "@/lib/safe-json";
+import { redactPii } from "@/lib/redact";
 
 type Bindings = { DB: D1Database };
 
@@ -178,7 +181,7 @@ officeHoursRoutes.post(
     sValidator("json", bookOfficeHourSchema),
     async (c) => {
         const db = createDb(c.env.DB);
-        const svc = createOfficeHourService(db);
+        const svc = createOfficeHourService(db, c.env.DB);
         const { id } = c.req.valid("param");
         const body = c.req.valid("json");
 
@@ -188,6 +191,10 @@ officeHoursRoutes.post(
         // 過去のスロットは予約不可
         if (body.slotStart < Date.now()) {
             return c.json({ error: "過去の枠は予約できません" }, 409);
+        }
+        // 受付終了日を超えたスロットは予約不可
+        if (oh.endDate !== null && body.slotStart >= oh.endDate) {
+            return c.json({ error: "受付期間を過ぎています" }, 409);
         }
 
         // 主催者の busy と重なっていないか再確認（クライアントが古い状態を持っている可能性に備える）
@@ -262,11 +269,12 @@ officeHoursRoutes.post(
                             .where(eq(officeHourBookings.id, bookingId));
                     }
                 } else {
-                    console.error("[office-hour/book] Google Calendar event creation failed:", calRes.status, await calRes.text().catch(() => ""));
+                    const errBody = await calRes.text().catch(() => "");
+                    console.error("[office-hour/book] Google Calendar event creation failed:", calRes.status, redactPii(errBody));
                 }
             }
         } catch (e) {
-            console.error("[office-hour/book] Failed to create Google Calendar event:", e);
+            console.error("[office-hour/book] Failed to create Google Calendar event:", redactPii(e));
         }
 
         return c.json({ ok: true, bookingId });
@@ -304,18 +312,9 @@ officeHoursRoutes.delete(
     async (c) => {
         const db = createDb(c.env.DB);
         const { id } = c.req.valid("param");
-        const cookieHeader = c.req.header("cookie") ?? "";
-        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
-        const token = match?.[1];
-        const row = await db.query.officeHours.findFirst({
-            where: eq(officeHours.id, id),
-            columns: { adminAccessToken: true, deletedAt: true },
-        });
-        if (!row) return c.json({ error: "Office Hour not found" }, 404);
-        if (row.deletedAt) return c.json({ error: "既に削除されています" }, 410);
-        if (!token || token !== row.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
+        const auth = await verifyOfficeHourAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+        if (auth.deleted) return c.json({ error: "既に削除されています" }, 410);
         const svc = createOfficeHourService(db);
         await svc.softDelete(id);
         return c.json({ ok: true });
@@ -329,22 +328,16 @@ officeHoursRoutes.get(
     async (c) => {
         const db = createDb(c.env.DB);
         const { id } = c.req.valid("param");
-        // admin auth ヘルパは events 用だが同じ access_token 比較。office_hours 用に簡易再実装。
-        const cookieHeader = c.req.header("cookie") ?? "";
-        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
-        const token = match?.[1];
+        const auth = await verifyOfficeHourAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+
         const row = await db.query.officeHours.findFirst({
             where: eq(officeHours.id, id),
-            columns: { adminAccessToken: true, title: true, deletedAt: true },
+            columns: { title: true },
         });
-        if (!row) return c.json({ error: "Office Hour not found" }, 404);
-        if (!token || token !== row.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
-
         const svc = createOfficeHourService(db);
         const bookings = await svc.listBookingsForAdmin(id);
-        return c.json({ title: row.title, bookings, deleted: row.deletedAt !== null });
+        return c.json({ title: row?.title ?? "", bookings, deleted: auth.deleted ?? false });
     }
 );
 
@@ -355,13 +348,12 @@ officeHoursRoutes.get(
     async (c) => {
         const db = createDb(c.env.DB);
         const { id } = c.req.valid("param");
-        const cookieHeader = c.req.header("cookie") ?? "";
-        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
-        const token = match?.[1];
+        const auth = await verifyOfficeHourAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+
         const row = await db.query.officeHours.findFirst({
             where: eq(officeHours.id, id),
             columns: {
-                adminAccessToken: true,
                 title: true,
                 description: true,
                 startDate: true,
@@ -370,23 +362,19 @@ officeHoursRoutes.get(
                 slotDurationMin: true,
                 capacityPerSlot: true,
                 bufferMin: true,
-                deletedAt: true,
             },
         });
         if (!row) return c.json({ error: "Office Hour not found" }, 404);
-        if (!token || token !== row.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
         return c.json({
             title: row.title,
             description: row.description,
             startDate: row.startDate,
             endDate: row.endDate,
-            windows: JSON.parse(row.windows),
+            windows: safeJsonParse<WeeklyWindow[]>(row.windows, "office_hours.windows") ?? [],
             slotDurationMin: row.slotDurationMin,
             capacityPerSlot: row.capacityPerSlot,
             bufferMin: row.bufferMin,
-            deleted: row.deletedAt !== null,
+            deleted: auth.deleted ?? false,
         });
     }
 );
@@ -400,18 +388,9 @@ officeHoursRoutes.patch(
         const db = createDb(c.env.DB);
         const { id } = c.req.valid("param");
         const body = c.req.valid("json");
-        const cookieHeader = c.req.header("cookie") ?? "";
-        const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${id}=([^;]+)`));
-        const token = match?.[1];
-        const row = await db.query.officeHours.findFirst({
-            where: eq(officeHours.id, id),
-            columns: { adminAccessToken: true, deletedAt: true },
-        });
-        if (!row) return c.json({ error: "Office Hour not found" }, 404);
-        if (row.deletedAt) return c.json({ error: "この Office Hour は削除されています" }, 410);
-        if (!token || token !== row.adminAccessToken) {
-            return c.json({ error: "Unauthorized" }, 401);
-        }
+        const auth = await verifyOfficeHourAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+        if (auth.deleted) return c.json({ error: "この Office Hour は削除されています" }, 410);
         const svc = createOfficeHourService(db);
         await svc.updateSettings(id, body);
         return c.json({ ok: true });
