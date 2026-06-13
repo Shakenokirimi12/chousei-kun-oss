@@ -34,10 +34,12 @@ export default async function AdminPage({ params }: { params: Promise<{ id: stri
   return (
     <div className="min-h-screen bg-background text-foreground p-2 sm:p-4 md:p-6 lg:p-8">
       <div className="w-full space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold">{siteConfig.ui.admin.title}</h1>
-            <p className="text-muted-foreground text-sm">{event.title} の管理設定</p>
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <h1 className="text-2xl font-bold shrink-0">{siteConfig.ui.admin.title}</h1>
+            <p className="text-muted-foreground text-sm truncate" title={`${event.title} の管理設定`}>
+              {event.title} の管理設定
+            </p>
           </div>
           <AdminSessionActions eventId={id} />
         </div>

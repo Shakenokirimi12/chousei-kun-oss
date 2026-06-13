@@ -208,13 +208,21 @@ export function OfficeHourBookingView({ id }: { id: string }) {
             });
             if (!res.ok) {
                 const err = (await res.json().catch(() => ({}))) as { error?: string };
-                setBookingError(err.error ?? "予約に失敗しました");
+                if (res.status === 429) {
+                    setBookingError(err.error ?? "予約の試行が多すぎます。しばらくしてから再度お試しください。");
+                } else {
+                    setBookingError(err.error ?? "予約に失敗しました");
+                }
                 if (res.status === 409) await load();
                 return;
             }
+            const body = (await res.json().catch(() => ({}))) as { calendarSync?: "ok" | "failed" | "skipped" };
             localStorage.setItem(`${BOOKING_STORAGE_PREFIX}${id}`, String(pendingSlot.startMs));
             setBookedSlotStart(pendingSlot.startMs);
             setBookingSuccess(true);
+            if (body.calendarSync === "failed") {
+                setBookingError("予約は完了しましたが、主催者のカレンダーへの自動反映に失敗しました。主催者に直接連絡しておくと安心です。");
+            }
             await load();
         } catch (e) {
             console.error(e);

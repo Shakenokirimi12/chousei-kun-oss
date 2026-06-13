@@ -144,7 +144,11 @@ export default function AISchedulingAssistant({
             });
 
             if (!res.ok) {
-                const error = await res.json() as { error: string };
+                const error = await res.json().catch(() => ({ error: "" })) as { error?: string };
+                // 429 はレート制限。ユーザーに具体的な復帰目安を伝える。
+                if (res.status === 429) {
+                    throw new Error("AI利用回数の上限に達しました。1分ほど待ってから再度お試しください。");
+                }
                 throw new Error(error.error || "AIアシスタントとの通信に失敗しました");
             }
 
@@ -180,16 +184,23 @@ export default function AISchedulingAssistant({
                     onClick={() => onOpen()}
                     className="hidden md:flex fixed right-0 top-1/2 -translate-y-1/2 z-40 flex-col items-center gap-2 px-2 py-6 rounded-l-2xl bg-gradient-to-b from-primary to-primary/80 text-primary-foreground shadow-xl hover:pr-3 transition-all group animate-in slide-in-from-right duration-500"
                     title="AI日程調整を開く"
+                    aria-expanded={false}
+                    aria-controls="ai-scheduling-pane"
+                    aria-label="AI日程調整パネルを開く"
                 >
                     <Sparkles className="h-5 w-5 mb-1 group-hover:scale-110 transition-transform" />
-                    <span className="text-xs font-bold [writing-mode:vertical-rl] tracking-widest uppercase">AI Assistant</span>
+                    <span className="text-xs font-bold [writing-mode:vertical-rl] tracking-widest">AIアシスタント</span>
                     <ArrowLeft className="h-3 w-3 mt-2 opacity-70 group-hover:-translate-x-1 transition-transform" />
                 </button>
             )}
 
             {/* Side Pane */}
             {isOpen && (
-                <div className="hidden md:flex w-full lg:w-80 h-[calc(100%-1rem)] m-2 flex-col bg-card/80 backdrop-blur-xl border rounded-2xl shadow-2xl animate-in slide-in-from-right duration-300 ring-1 ring-primary/10 overflow-hidden relative z-50">
+                <div
+                    id="ai-scheduling-pane"
+                    role="region"
+                    aria-label="AI日程調整"
+                    className="hidden md:flex w-full lg:w-80 h-[calc(100%-1rem)] m-2 flex-col bg-card/80 backdrop-blur-xl border rounded-2xl shadow-2xl animate-in slide-in-from-right duration-300 ring-1 ring-primary/10 overflow-hidden relative z-50">
                     <div className="p-4 border-b flex items-center justify-between bg-primary/10">
                         <div className="flex items-center gap-2">
                             <Sparkles className="h-4 w-4 text-primary" />

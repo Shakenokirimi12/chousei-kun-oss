@@ -384,6 +384,86 @@ eventsRoutes.delete(
     }
 );
 
+/**
+ * 管理者: 参加者の回答を CSV としてダウンロード。
+ * 列: 名前, メール, コメント, 候補1..N（○ / △ / × / -）
+ */
+eventsRoutes.get(
+    "/:id/admin/export.csv",
+    sValidator("param", eventIdParamSchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id } = c.req.valid("param");
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+
+        const event = await db.query.events.findFirst({
+            where: eq(events.id, id),
+            columns: { title: true, candidates: true },
+        });
+        if (!event) return c.json({ error: "Event not found" }, 404);
+        const candidates = safeJsonParse<string[]>(event.candidates, "events.candidates") ?? [];
+
+        const [participantRows, availabilityRows] = await Promise.all([
+            db.select({
+                id: participants.id,
+                name: participants.name,
+                notificationEmail: participants.notificationEmail,
+                comment: participants.comment,
+            }).from(participants).where(eq(participants.eventId, id)),
+            db.select({
+                participantId: availabilities.participantId,
+                candidateIdx: availabilities.candidateIdx,
+                status: availabilities.status,
+            }).from(availabilities)
+                .innerJoin(participants, eq(availabilities.participantId, participants.id))
+                .where(eq(participants.eventId, id)),
+        ]);
+
+        // (pid, idx) → status
+        const statusMap = new Map<string, number>();
+        for (const a of availabilityRows) statusMap.set(`${a.participantId}:${a.candidateIdx}`, a.status);
+
+        const symbolFor = (s: number | undefined) => {
+            if (s === 1) return "○";
+            if (s === 2) return "△";
+            if (s === 3) return "×";
+            return "-";
+        };
+
+        const escapeCsv = (v: string) => {
+            if (/[",\n\r]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+            return v;
+        };
+
+        const header = ["名前", "メール", "コメント", ...candidates.map((_, i) => `候補${i + 1}`)];
+        const lines = [header.map(escapeCsv).join(",")];
+
+        for (const p of participantRows) {
+            const name = (await decryptPii(p.name)) ?? "";
+            const email = (await decryptPii(p.notificationEmail)) ?? "";
+            const comment = (await decryptPii(p.comment)) ?? "";
+            const cols = [
+                name,
+                email,
+                comment,
+                ...candidates.map((_, i) => symbolFor(statusMap.get(`${p.id}:${i}`))),
+            ];
+            lines.push(cols.map(escapeCsv).join(","));
+        }
+
+        // BOM 付きで Excel が UTF-8 として開けるようにする。
+        const body = "﻿" + lines.join("\r\n");
+        const filename = `${event.title.replace(/[\\/:*?"<>|]+/g, "_")}_responses.csv`;
+        return new Response(body, {
+            headers: {
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+            },
+        });
+    }
+);
+
 eventsRoutes.post(
     "/:id/admin-logout",
     sValidator("param", eventIdParamSchema),

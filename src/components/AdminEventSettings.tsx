@@ -9,7 +9,7 @@ import { PeriodSelector, CUSTOM_PERIODS } from "@/components/PeriodSelector";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ParticipantComments } from "@/components/ParticipantComments";
 import { CalendarExportDialog } from "@/components/CalendarExportDialog";
-import { Check } from "lucide-react";
+import { Check, CircleCheck, CircleAlert, CircleX } from "lucide-react";
 import { logActivity } from "@/hooks/useActivityLog";
 
 type Props = {
@@ -229,6 +229,10 @@ export function AdminEventSettings({
     };
 
     const confirmCandidate = async (idx: number | null) => {
+        if (idx !== null) {
+            const ok = window.confirm("選択した日程で確定します。よろしいですか？\n\n参加者に通知メールが送信される可能性があります。");
+            if (!ok) return;
+        }
         logActivity("日程確定開始", idx !== null ? `候補インデックス: ${idx}` : "確定解除");
         setError("");
         setIsConfirming(true);
@@ -327,6 +331,19 @@ export function AdminEventSettings({
                 </TabsContent>
 
                 <TabsContent value="participants" className="space-y-2">
+                    <div className="flex justify-end">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            asChild
+                            disabled={participantSummaries.length === 0}
+                        >
+                            <a href={`/api/events/${eventId}/admin/export.csv`} download>
+                                CSV をダウンロード
+                            </a>
+                        </Button>
+                    </div>
                     {participantSummaries.length === 0 ? (
                         <p className="text-sm text-muted-foreground py-8 text-center">まだ回答者はいません。</p>
                     ) : (
@@ -336,9 +353,21 @@ export function AdminEventSettings({
                                     <tr className="border-b bg-muted/50">
                                         <th className="text-left px-4 py-2 font-medium">名前</th>
                                         <th className="text-left px-4 py-2 font-medium">メールアドレス</th>
-                                        <th className="text-center px-3 py-2 font-medium text-green-600">○</th>
-                                        <th className="text-center px-3 py-2 font-medium text-amber-500">△</th>
-                                        <th className="text-center px-3 py-2 font-medium text-red-500">×</th>
+                                        <th className="text-center px-3 py-2 font-medium text-green-600">
+                                            <span className="inline-flex items-center gap-1" aria-label="参加可能">
+                                                <CircleCheck className="h-4 w-4" aria-hidden="true" />○
+                                            </span>
+                                        </th>
+                                        <th className="text-center px-3 py-2 font-medium text-amber-500">
+                                            <span className="inline-flex items-center gap-1" aria-label="未定／調整可">
+                                                <CircleAlert className="h-4 w-4" aria-hidden="true" />△
+                                            </span>
+                                        </th>
+                                        <th className="text-center px-3 py-2 font-medium text-red-500">
+                                            <span className="inline-flex items-center gap-1" aria-label="参加不可">
+                                                <CircleX className="h-4 w-4" aria-hidden="true" />×
+                                            </span>
+                                        </th>
                                         <th className="text-left px-4 py-2 font-medium">コメント</th>
                                     </tr>
                                 </thead>

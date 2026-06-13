@@ -11,6 +11,7 @@ import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
 import { useCopy } from "@/hooks/useCopy";
+import QRCode from "react-qr-code";
 
 import {
     Dialog,
@@ -53,6 +54,7 @@ function UrlShareCard({
     hint: string;
 }) {
     const { copied, error, copy } = useCopy();
+    const [qrOpen, setQrOpen] = React.useState(false);
     const accent =
         color === "primary"
             ? "text-primary"
@@ -98,7 +100,22 @@ function UrlShareCard({
                         </>
                     )}
                 </Button>
+                <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setQrOpen((v) => !v)}
+                    aria-label="QRコードを表示"
+                    aria-expanded={qrOpen}
+                >
+                    QR
+                </Button>
             </div>
+            {qrOpen && (
+                <div className="flex justify-center p-3 rounded-lg bg-white">
+                    <QRCode value={url} size={176} style={{ height: "auto", maxWidth: "100%", width: "176px" }} />
+                </div>
+            )}
             <p className="text-xs text-muted-foreground">{hint}</p>
         </div>
     );
