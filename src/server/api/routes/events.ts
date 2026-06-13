@@ -385,6 +385,52 @@ eventsRoutes.delete(
 );
 
 /**
+ * 管理者: 既存イベントを複製。タイトル末尾に「（コピー）」を付ける。
+ * 候補日程・説明・通知設定（の元値）はコピー、回答はコピーしない。
+ * 新しい管理者アクセストークン・パスワードハッシュは元のものをそのまま流用
+ * （= 元の管理者がそのまま新イベントも管理できる）。
+ */
+eventsRoutes.post(
+    "/:id/admin/duplicate",
+    sValidator("param", eventIdParamSchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id } = c.req.valid("param");
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+
+        const src = await db.query.events.findFirst({
+            where: eq(events.id, id),
+            columns: {
+                title: true,
+                description: true,
+                candidates: true,
+                adminPasswordHash: true,
+                adminAccessToken: true,
+            },
+        });
+        if (!src) return c.json({ error: "Event not found" }, 404);
+
+        const newId = crypto.randomUUID();
+        await db.insert(events).values({
+            id: newId,
+            title: `${src.title}（コピー）`,
+            description: src.description,
+            candidates: src.candidates,
+            createdAt: Date.now(),
+            adminPasswordHash: src.adminPasswordHash,
+            adminAccessToken: src.adminAccessToken,
+        });
+
+        c.header(
+            "Set-Cookie",
+            `chousei_admin_${newId}=${src.adminAccessToken}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=2592000`
+        );
+        return c.json({ id: newId }, 201);
+    }
+);
+
+/**
  * 管理者: 参加者の回答を CSV としてダウンロード。
  * 列: 名前, メール, コメント, 候補1..N（○ / △ / × / -）
  */

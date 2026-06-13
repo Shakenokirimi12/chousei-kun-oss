@@ -204,6 +204,26 @@ export function AdminEventSettings({
 
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteConfirmText, setDeleteConfirmText] = useState("");
+    const [isDuplicating, setIsDuplicating] = useState(false);
+    const handleDuplicateEvent = async () => {
+        if (!confirm("このイベントの設定を複製した新しいイベントを作成します。回答はコピーされません。続行しますか？")) return;
+        setError("");
+        setIsDuplicating(true);
+        try {
+            const res = await fetch(`/api/events/${eventId}/admin/duplicate`, { method: "POST" });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({})) as { error?: string };
+                throw new Error(data.error || "複製に失敗しました。");
+            }
+            const data = await res.json() as { id: string };
+            logActivity("イベント複製成功", data.id);
+            router.push(`/${data.id}/admin`);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "複製に失敗しました。");
+        } finally {
+            setIsDuplicating(false);
+        }
+    };
     const handleDeleteEvent = async () => {
         if (deleteConfirmText !== title) {
             setError("確認のためイベントタイトルをそのまま入力してください。");
@@ -449,8 +469,26 @@ export function AdminEventSettings({
                 />
             )}
 
+            {/* 設定操作 */}
+            <div className="mt-12 rounded-md border bg-card/40 p-4 space-y-3">
+                <div>
+                    <h3 className="text-sm font-semibold">このイベントを複製</h3>
+                    <p className="text-xs text-muted-foreground mt-1">
+                        同じ候補日程・説明・管理者パスワードで新しいイベントを作成します。回答はコピーされません。
+                    </p>
+                </div>
+                <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isDuplicating}
+                    onClick={handleDuplicateEvent}
+                >
+                    {isDuplicating ? "複製中..." : "イベントを複製"}
+                </Button>
+            </div>
+
             {/* 危険な操作: 完全削除 */}
-            <div className="mt-12 rounded-md border border-destructive/40 bg-destructive/5 p-4 space-y-3">
+            <div className="mt-6 rounded-md border border-destructive/40 bg-destructive/5 p-4 space-y-3">
                 <div>
                     <h3 className="text-sm font-semibold text-destructive">イベントを完全削除</h3>
                     <p className="text-xs text-muted-foreground mt-1">

@@ -96,13 +96,28 @@ export const EventResultsView = memo(function EventResultsView({
                 />
             )}
             {participants.length === 0 && (
-                <div className="rounded-lg border border-dashed p-8 text-center">
+                <div className="rounded-lg border border-dashed p-8 text-center space-y-3">
                     <Users className="mx-auto h-8 w-8 text-muted-foreground/60" />
-                    <p className="mt-3 font-medium">まだ回答がありません</p>
-                    <p className="mt-1 text-sm text-muted-foreground">最初の回答者になりましょう。</p>
-                    <Link href={`/${eventId}`} className="inline-block mt-4">
-                        <Button>回答する</Button>
-                    </Link>
+                    <p className="font-medium">まだ回答がありません</p>
+                    <p className="text-sm text-muted-foreground">
+                        参加してほしい人にこのページの URL を共有して回答してもらいましょう。
+                    </p>
+                    <div className="flex items-center justify-center gap-2 flex-wrap">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                const url = `${window.location.origin}/${eventId}`;
+                                navigator.clipboard?.writeText(url);
+                            }}
+                        >
+                            URL をコピー
+                        </Button>
+                        <Link href={`/${eventId}`}>
+                            <Button size="sm">自分も回答する</Button>
+                        </Link>
+                    </div>
                 </div>
             )}
             <AvailabilityTimeline
