@@ -484,19 +484,26 @@ export function EventForm() {
     return (
         <div className="w-full max-w-none mx-auto flex-1 min-h-0 flex overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0 p-4 lg:p-6">
-                <div className="mb-2 sm:mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center shrink-0 gap-4">
-                    <div className="text-left flex items-center gap-4">
-                        <div>
-                            <h2 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-                                {siteConfig.ui.createEvent.title}
-                            </h2>
-                            <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-                                {siteConfig.ui.createEvent.description}
-                            </p>
+                {/* STEP インジケータ付きの簡潔なヘッダー */}
+                <div className="mb-3 sm:mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center shrink-0 gap-3">
+                    <div className="text-left">
+                        <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground tracking-wide">
+                            <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                                1
+                            </span>
+                            <span>STEP 1 / 2 ・ 候補日程を選ぶ</span>
                         </div>
+                        <h2 className="text-lg sm:text-xl font-bold mt-1">
+                            {siteConfig.ui.createEvent.title}
+                        </h2>
                     </div>
 
                     <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                        {selectedPeriods.length > 0 && (
+                            <span className="text-xs text-muted-foreground hidden sm:inline">
+                                {selectedPeriods.length} 候補選択中
+                            </span>
+                        )}
                         <Button
                             type="button"
                             onClick={() => setIsModalOpen(true)}
@@ -504,7 +511,7 @@ export function EventForm() {
                             size="sm"
                             className="shadow-sm"
                         >
-                            次へ (詳細を設定) <ArrowRight className="ml-2 h-4 w-4" />
+                            次へ <ArrowRight className="ml-2 h-4 w-4" />
                         </Button>
                     </div>
                 </div>

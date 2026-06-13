@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Check, X, Copy, ZoomIn, ZoomOut, AlertTriangle } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Check, X, Copy, ZoomIn, ZoomOut, AlertTriangle, Info, RotateCcw } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 
@@ -352,157 +353,166 @@ export function PeriodSelector({
                     />
                 </div>
 
-                <div className="rounded-md border bg-card p-3 shadow-sm flex flex-col shrink-0">
-                    <h3 className="font-semibold text-sm mb-3 px-2 flex justify-between items-center shrink-0">
-                        <span>クイック選択</span>
-                        {focusedDate && (
-                            <span className="text-xs font-normal text-muted-foreground bg-accent px-2 py-0.5 rounded">
-                                {format(focusedDate, "M月d日", { locale: ja })}
+                {/* 編集対象日のサブヘッダー + リセット — 操作の文脈を明示 */}
+                {focusedDate ? (
+                    <div className="rounded-md bg-accent/60 px-3 py-2 flex items-center justify-between shrink-0">
+                        <div className="flex flex-col leading-tight">
+                            <span className="text-[10px] text-muted-foreground">時間帯を編集中</span>
+                            <span className="text-sm font-semibold">
+                                {format(focusedDate, "M月d日(E)", { locale: ja })}
                             </span>
-                        )}
-                    </h3>
-                    <div className="space-y-3 flex-1 min-h-0 flex flex-col">
-                        {!focusedDate ? (
-                            <div className="text-sm text-muted-foreground text-center py-8">
-                                右側のカレンダーから日付を選択してください
-                            </div>
-                        ) : (
-                            <>
-                                <div className="flex flex-wrap items-center gap-1">
-                                    {CUSTOM_PERIODS.length > 0 && (
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            className="h-7 px-2 text-[10px]"
-                                            onClick={selectDayPeriods}
-                                        >
-                                            時限を全選択
-                                        </Button>
-                                    )}
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-7 px-2 text-[10px]"
-                                        onClick={selectDayHourly}
-                                    >
-                                        1日中
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-7 px-2 text-[10px] text-muted-foreground"
-                                        onClick={clearDayAll}
-                                    >
-                                        解除
-                                    </Button>
-                                </div>
-                                {CustomPeriodsGrid && (
-                                    <div className="shrink-0">
-                                        <CustomPeriodsGrid
-                                            groupedDates={{ [format(focusedDate, "yyyy-MM-dd")]: [] }}
-                                            selectedPeriods={selectedPeriods}
-                                            togglePeriod={(id) => {
-                                                const [_, pId] = id.split("_P");
-                                                toggleFocusedPeriod(Number(pId), "P");
-                                            }}
-                                            busyPeriodIds={busyPeriodIds}
-                                        />
-                                    </div>
-                                )}
-                                <div className="shrink-0">
-                                    <h4 className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-tight">時間範囲</h4>
-                                    <div className="flex items-center gap-1.5">
-                                        <Input
-                                            type="time"
-                                            step={3600}
-                                            min="00:00"
-                                            max="23:00"
-                                            value={rangeStart}
-                                            onChange={(e) => setRangeStart(e.target.value)}
-                                            className="h-8 px-2 text-xs tabular-nums"
-                                            aria-label="開始時刻"
-                                        />
-                                        <span className="text-xs text-muted-foreground">〜</span>
-                                        <Input
-                                            type="time"
-                                            step={3600}
-                                            min="01:00"
-                                            max="24:00"
-                                            value={rangeEnd}
-                                            onChange={(e) => setRangeEnd(e.target.value)}
-                                            className="h-8 px-2 text-xs tabular-nums"
-                                            aria-label="終了時刻"
-                                        />
-                                    </div>
-                                    <div className="flex gap-1 mt-1.5">
-                                        <Button
-                                            type="button"
-                                            variant="default"
-                                            size="sm"
-                                            className="h-7 px-2 text-[10px] flex-1"
-                                            onClick={() => applyHourlyRange("add")}
-                                        >
-                                            この範囲を追加
-                                        </Button>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            className="h-7 px-2 text-[10px]"
-                                            onClick={() => applyHourlyRange("remove")}
-                                        >
-                                            外す
-                                        </Button>
-                                    </div>
-                                    <p className="text-[10px] text-muted-foreground mt-1.5 leading-snug">
-                                        個別の時間は右のタイムラインをクリックで切替できます。
-                                    </p>
-                                </div>
-
-                                <div className="shrink-0 border-t pt-3">
-                                    <h4 className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-tight">繰り返し適用</h4>
-                                    <p className="text-[10px] text-muted-foreground mb-1.5 leading-snug">
-                                        この日に選んだ時間帯を、未来の同曜日・同日付に複製します。
-                                    </p>
-                                    <div className="flex items-center gap-1.5">
-                                        <select
-                                            value={recurrencePeriod}
-                                            onChange={(e) => setRecurrencePeriod(e.target.value as "weekly" | "biweekly" | "monthly")}
-                                            className="h-8 rounded-md border bg-background px-2 text-xs"
-                                            aria-label="繰り返しパターン"
-                                        >
-                                            <option value="weekly">毎週</option>
-                                            <option value="biweekly">隔週</option>
-                                            <option value="monthly">月次</option>
-                                        </select>
-                                        <Input
-                                            type="number"
-                                            min={1}
-                                            max={52}
-                                            value={recurrenceCount}
-                                            onChange={(e) => setRecurrenceCount(Math.max(1, Math.min(52, Number(e.target.value) || 1)))}
-                                            className="h-8 w-16 text-xs tabular-nums"
-                                            aria-label="繰り返し回数"
-                                        />
-                                        <span className="text-xs text-muted-foreground">回</span>
-                                    </div>
-                                    <Button
-                                        type="button"
-                                        variant="default"
-                                        size="sm"
-                                        className="h-7 px-2 text-[10px] mt-1.5 w-full"
-                                        onClick={applyRecurrence}
-                                    >
-                                        繰り返し追加
-                                    </Button>
-                                </div>
-                            </>
-                        )}
+                        </div>
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-[10px] text-muted-foreground"
+                            onClick={clearDayAll}
+                            title="この日の選択を全解除"
+                        >
+                            <RotateCcw className="w-3 h-3 mr-1" />
+                            リセット
+                        </Button>
                     </div>
-                </div>
+                ) : (
+                    <div className="rounded-md border border-dashed bg-card p-4 text-center text-xs text-muted-foreground shrink-0">
+                        左のカレンダーから日付を選んでください
+                    </div>
+                )}
+
+                {focusedDate && (
+                    <div className="rounded-md border bg-card p-3 shadow-sm flex flex-col shrink-0">
+                        <Tabs defaultValue="time" className="w-full">
+                            <TabsList className="grid w-full grid-cols-3 h-8 mb-3">
+                                <TabsTrigger value="time" className="text-[11px]">時間</TabsTrigger>
+                                <TabsTrigger value="period" className="text-[11px]" disabled={CUSTOM_PERIODS.length === 0}>
+                                    時限
+                                </TabsTrigger>
+                                <TabsTrigger value="recur" className="text-[11px]">繰り返し</TabsTrigger>
+                            </TabsList>
+
+                            {/* タブ1: 時間範囲 */}
+                            <TabsContent value="time" className="mt-0 space-y-2">
+                                <div className="flex items-center gap-1.5">
+                                    <Input
+                                        type="time"
+                                        step={3600}
+                                        min="00:00"
+                                        max="23:00"
+                                        value={rangeStart}
+                                        onChange={(e) => setRangeStart(e.target.value)}
+                                        className="h-9 px-2 text-sm tabular-nums flex-1"
+                                        aria-label="開始時刻"
+                                    />
+                                    <span className="text-xs text-muted-foreground">〜</span>
+                                    <Input
+                                        type="time"
+                                        step={3600}
+                                        min="01:00"
+                                        max="24:00"
+                                        value={rangeEnd}
+                                        onChange={(e) => setRangeEnd(e.target.value)}
+                                        className="h-9 px-2 text-sm tabular-nums flex-1"
+                                        aria-label="終了時刻"
+                                    />
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="default"
+                                    size="sm"
+                                    className="w-full h-9 text-xs"
+                                    onClick={() => applyHourlyRange("add")}
+                                >
+                                    この範囲を候補に追加
+                                </Button>
+                                <div className="flex items-center justify-between text-[10px]">
+                                    <button
+                                        type="button"
+                                        onClick={selectDayHourly}
+                                        className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+                                    >
+                                        1日中を選ぶ
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => applyHourlyRange("remove")}
+                                        className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+                                    >
+                                        この範囲を外す
+                                    </button>
+                                </div>
+                                <div className="flex items-start gap-2 rounded-md bg-muted/50 px-2 py-1.5">
+                                    <Info className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground" />
+                                    <p className="text-[10px] text-muted-foreground leading-snug">
+                                        個別の時間は右のタイムラインをクリックでも切替できます。
+                                    </p>
+                                </div>
+                            </TabsContent>
+
+                            {/* タブ2: 時限 (カスタム枠) */}
+                            <TabsContent value="period" className="mt-0 space-y-2">
+                                <Button
+                                    type="button"
+                                    variant="default"
+                                    size="sm"
+                                    className="w-full h-9 text-xs"
+                                    onClick={selectDayPeriods}
+                                >
+                                    時限を全選択
+                                </Button>
+                                {CustomPeriodsGrid && (
+                                    <CustomPeriodsGrid
+                                        groupedDates={{ [format(focusedDate, "yyyy-MM-dd")]: [] }}
+                                        selectedPeriods={selectedPeriods}
+                                        togglePeriod={(id) => {
+                                            const [_, pId] = id.split("_P");
+                                            toggleFocusedPeriod(Number(pId), "P");
+                                        }}
+                                        busyPeriodIds={busyPeriodIds}
+                                    />
+                                )}
+                            </TabsContent>
+
+                            {/* タブ3: 繰り返し */}
+                            <TabsContent value="recur" className="mt-0 space-y-2">
+                                <p className="text-[10px] text-muted-foreground leading-snug">
+                                    この日に選んだ時間帯を、未来の同曜日・同日付に複製します。
+                                </p>
+                                <div className="flex items-center gap-1.5">
+                                    <select
+                                        value={recurrencePeriod}
+                                        onChange={(e) => setRecurrencePeriod(e.target.value as "weekly" | "biweekly" | "monthly")}
+                                        className="h-9 rounded-md border bg-background px-2 text-xs flex-1"
+                                        aria-label="繰り返しパターン"
+                                    >
+                                        <option value="weekly">毎週</option>
+                                        <option value="biweekly">隔週</option>
+                                        <option value="monthly">月次</option>
+                                    </select>
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        max={52}
+                                        value={recurrenceCount}
+                                        onChange={(e) => setRecurrenceCount(Math.max(1, Math.min(52, Number(e.target.value) || 1)))}
+                                        className="h-9 w-16 text-sm tabular-nums"
+                                        aria-label="繰り返し回数"
+                                    />
+                                    <span className="text-xs text-muted-foreground">回</span>
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="default"
+                                    size="sm"
+                                    className="w-full h-9 text-xs"
+                                    onClick={applyRecurrence}
+                                >
+                                    繰り返し追加
+                                </Button>
+                            </TabsContent>
+                        </Tabs>
+                    </div>
+                )}
             </div>
 
             {/* Right Main Area: Timeline */}
