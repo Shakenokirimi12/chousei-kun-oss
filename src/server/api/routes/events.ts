@@ -21,7 +21,7 @@ import {
     insertAvailabilitiesInBatches,
     parseCandidateWindow,
 } from "../utils";
-import { verifyAdminSession } from "../middleware";
+import { verifyAdminSession, isSameOrigin } from "../middleware";
 import { enforceRateLimit, clientIp, type RateLimitBinding } from "../rate-limit";
 import { safeJsonParse } from "@/lib/safe-json";
 import { redactPii } from "@/lib/redact";
@@ -30,9 +30,22 @@ import { encryptPii, decryptPii } from "@/lib/pii-crypto";
 type Bindings = {
     DB: D1Database;
     AUTH_RATE_LIMITER?: RateLimitBinding;
+    WRITE_RATE_LIMITER?: RateLimitBinding;
 };
 
 export const eventsRoutes = new Hono<{ Bindings: Bindings }>();
+
+// CSRF: 状態変更系（POST/PATCH/DELETE）には Origin/Referer の同一オリジン検証を
+// 必須化する。SameSite=Strict cookie と二重防御。GET/HEAD は影響なし。
+eventsRoutes.use("*", async (c, next) => {
+    const method = c.req.method;
+    if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
+        if (!isSameOrigin(c)) {
+            return c.json({ error: "Cross-origin request rejected" }, 403);
+        }
+    }
+    return next();
+});
 
 /**
  * 既存参加者の availability を新しい入力で取り替える。delete→insert を
@@ -187,8 +200,13 @@ eventsRoutes.post(
     sValidator("param", eventIdParamSchema),
     sValidator("json", participateSchema),
     async (c) => {
-        const db = createDb(c.env.DB);
         const { id: eventId } = c.req.valid("param");
+        // 連投・PII スパム対策（イベント+IP）。AUTH より緩いリミッタを使用。
+        const allowed = await enforceRateLimit(c.env.WRITE_RATE_LIMITER, `participate:${eventId}:${clientIp(c)}`);
+        if (!allowed) {
+            return c.json({ error: "回答の送信が多すぎます。しばらくしてから再度お試しください。" }, 429);
+        }
+        const db = createDb(c.env.DB);
         const { name, comment, availabilities: statuses, participantId, userId, notifyOnFinalize, notificationEmail } = c.req.valid("json");
         const cookieHeader = c.req.header("cookie") ?? "";
         const googleSessionId = parseCookieValue(cookieHeader, "chousei_google_session");
@@ -314,12 +332,22 @@ eventsRoutes.post(
         });
         if (!event) return c.json({ error: "Event not found" }, 404);
 
-        const ok = await verifyPassword(password, event.adminPasswordHash);
-        if (!ok || !event.adminAccessToken) return c.json({ error: "Invalid password" }, 401);
+        const result = await verifyPassword(password, event.adminPasswordHash);
+        if (!result.ok || !event.adminAccessToken) return c.json({ error: "Invalid password" }, 401);
+
+        // 旧形式ハッシュなら現行 PBKDF2 で再ハッシュして昇格させる。
+        if (result.needsRehash) {
+            try {
+                const upgraded = await createPasswordHash(password);
+                await db.update(events).set({ adminPasswordHash: upgraded }).where(eq(events.id, id));
+            } catch (e) {
+                console.error("[admin-auth] hash upgrade failed:", e);
+            }
+        }
 
         c.header(
             "Set-Cookie",
-            `chousei_admin_${id}=${event.adminAccessToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=2592000`
+            `chousei_admin_${id}=${event.adminAccessToken}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=2592000`
         );
         return c.json({ ok: true });
     }
@@ -350,7 +378,7 @@ eventsRoutes.delete(
         // admin cookie もクリア
         c.header(
             "Set-Cookie",
-            `chousei_admin_${id}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`
+            `chousei_admin_${id}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0`
         );
         return c.json({ ok: true });
     }
@@ -363,7 +391,7 @@ eventsRoutes.post(
         const { id } = c.req.valid("param");
         c.header(
             "Set-Cookie",
-            `chousei_admin_${id}=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0`
+            `chousei_admin_${id}=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0`
         );
         return c.json({ ok: true });
     }

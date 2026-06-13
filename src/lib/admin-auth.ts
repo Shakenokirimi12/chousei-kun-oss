@@ -63,24 +63,33 @@ export async function createPasswordHash(password: string): Promise<string> {
 /**
  * パスワードを検証する。新形式(pbkdf2$...)と旧形式(salt:hash)の両方をサポート。
  * 比較は定数時間で行う。
+ *
+ * 旧形式のハッシュにヒットしたケースは `needsRehash: true` を返す。
+ * 呼び出し側は同じパスワードで `createPasswordHash` を再生成し、DB を
+ * 上書きすることで次回以降のログインを新形式に昇格させること。
  */
 export async function verifyPassword(
     password: string,
     storedHash: string | null | undefined
-): Promise<boolean> {
-    if (!storedHash) return false;
+): Promise<{ ok: boolean; needsRehash: boolean }> {
+    if (!storedHash) return { ok: false, needsRehash: false };
 
     if (storedHash.startsWith("pbkdf2$")) {
         const [, iterationsRaw, saltHex, hash] = storedHash.split("$");
         const iterations = Number.parseInt(iterationsRaw, 10);
-        if (!saltHex || !hash || !Number.isFinite(iterations)) return false;
+        if (!saltHex || !hash || !Number.isFinite(iterations)) {
+            return { ok: false, needsRehash: false };
+        }
         const candidate = await pbkdf2(password, saltHex, iterations);
-        return timingSafeEqual(candidate, hash);
+        const ok = timingSafeEqual(candidate, hash);
+        // 反復回数が現行値より少なければ再ハッシュ対象
+        return { ok, needsRehash: ok && iterations < PBKDF2_ITERATIONS };
     }
 
     // 旧形式: salt:hash（単一ラウンド SHA-256）
     const [salt, hash] = storedHash.split(":");
-    if (!salt || !hash) return false;
+    if (!salt || !hash) return { ok: false, needsRehash: false };
     const candidate = await legacySha256(password, salt);
-    return timingSafeEqual(candidate, hash);
+    const ok = timingSafeEqual(candidate, hash);
+    return { ok, needsRehash: ok };
 }

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    name: Lint + Typecheck + Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npx eslint "src/**/*.{ts,tsx}" --max-warnings 0
+
+      - name: Next.js build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_ENABLE_CAMPUS_SQUARE: "false"
+
+  audit:
+    name: npm audit (production)
+    runs-on: ubuntu-latest
+    # Audit failures should not block merges but should surface in the UI.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm audit --omit=dev --audit-level=high

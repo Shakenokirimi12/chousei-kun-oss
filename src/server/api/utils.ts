@@ -138,9 +138,16 @@ export async function getGoogleSessionAndScopes(db: DbClient, sessionId: string)
         return { session: null, scopes: [] as string[] };
     }
 
+    // access_token を URL クエリに載せると Referer/ログに残るため、
+    // Authorization ヘッダ経由で問い合わせる。
     const tokenInfoRes = await fetch(
-        `https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${encodeURIComponent(session.accessToken)}`,
-        { signal: AbortSignal.timeout(10_000) }
+        "https://www.googleapis.com/oauth2/v3/tokeninfo",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ access_token: session.accessToken }),
+            signal: AbortSignal.timeout(10_000),
+        }
     );
     if (!tokenInfoRes.ok) {
         return { session, scopes: [] as string[] };

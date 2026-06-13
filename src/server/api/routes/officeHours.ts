@@ -13,16 +13,32 @@ import {
     updateOfficeHourSchema,
 } from "../schemas";
 import { parseCookieValue, refreshGoogleTokenIfNeeded } from "../utils";
-import { verifyPassword } from "@/lib/admin-auth";
+import { verifyPassword, createPasswordHash } from "@/lib/admin-auth";
 import { COOKIE_NAMES } from "@/lib/constants";
 import { syncOneOfficeHour } from "@/server/cron/sync-host-busy";
-import { verifyOfficeHourAdminSession } from "../middleware";
+import { verifyOfficeHourAdminSession, isSameOrigin } from "../middleware";
 import { safeJsonParse } from "@/lib/safe-json";
 import { redactPii } from "@/lib/redact";
+import { enforceRateLimit, clientIp, type RateLimitBinding } from "../rate-limit";
 
-type Bindings = { DB: D1Database };
+type Bindings = {
+    DB: D1Database;
+    AUTH_RATE_LIMITER?: RateLimitBinding;
+    WRITE_RATE_LIMITER?: RateLimitBinding;
+};
 
 export const officeHoursRoutes = new Hono<{ Bindings: Bindings }>();
+
+// CSRF: 状態変更系には Origin/Referer の同一オリジン検証を必須化。
+officeHoursRoutes.use("*", async (c, next) => {
+    const method = c.req.method;
+    if (method === "POST" || method === "PATCH" || method === "DELETE" || method === "PUT") {
+        if (!isSameOrigin(c)) {
+            return c.json({ error: "Cross-origin request rejected" }, 403);
+        }
+    }
+    return next();
+});
 
 /**
  * 自分が作成した Office Hour 一覧（Google セッション必須）。
@@ -91,7 +107,7 @@ officeHoursRoutes.post("/", sValidator("json", createOfficeHourSchema), async (c
     // 管理者セッション cookie をすぐ発行
     c.header(
         "Set-Cookie",
-        `${COOKIE_NAMES.ADMIN_PREFIX}${id}=${adminAccessToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=2592000`
+        `${COOKIE_NAMES.ADMIN_PREFIX}${id}=${adminAccessToken}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=2592000`
     );
     return c.json({ id }, 201);
 });
@@ -180,9 +196,14 @@ officeHoursRoutes.post(
     sValidator("param", officeHourIdParamSchema),
     sValidator("json", bookOfficeHourSchema),
     async (c) => {
+        const { id } = c.req.valid("param");
+        // 予約スパム対策（Office Hour + IP）。
+        const allowed = await enforceRateLimit(c.env.WRITE_RATE_LIMITER, `book:${id}:${clientIp(c)}`);
+        if (!allowed) {
+            return c.json({ error: "予約の試行が多すぎます。しばらくしてから再度お試しください。" }, 429);
+        }
         const db = createDb(c.env.DB);
         const svc = createOfficeHourService(db, c.env.DB);
-        const { id } = c.req.valid("param");
         const body = c.req.valid("json");
 
         const oh = await svc.findById(id);
@@ -219,6 +240,11 @@ officeHoursRoutes.post(
         }
 
         const bookingId = (r as { ok: true; bookingId: string }).bookingId;
+
+        // Google カレンダー同期の結果をクライアントに返す。失敗しても予約自体は
+        // 成立しているので、UI 側で「予約は完了したがカレンダーに反映できなかった」
+        // と明示的に案内する。
+        let calendarSync: "ok" | "failed" | "skipped" = "skipped";
 
         // Google カレンダーにイベントを自動作成（ホストのカレンダーに追加）
         try {
@@ -268,16 +294,19 @@ officeHoursRoutes.post(
                             .set({ googleCalendarEventId: calEvent.id })
                             .where(eq(officeHourBookings.id, bookingId));
                     }
+                    calendarSync = "ok";
                 } else {
                     const errBody = await calRes.text().catch(() => "");
                     console.error("[office-hour/book] Google Calendar event creation failed:", calRes.status, redactPii(errBody));
+                    calendarSync = "failed";
                 }
             }
         } catch (e) {
             console.error("[office-hour/book] Failed to create Google Calendar event:", redactPii(e));
+            calendarSync = "failed";
         }
 
-        return c.json({ ok: true, bookingId });
+        return c.json({ ok: true, bookingId, calendarSync });
     }
 );
 
@@ -287,19 +316,32 @@ officeHoursRoutes.post(
     sValidator("param", officeHourIdParamSchema),
     sValidator("json", z.object({ password: z.string().min(1).max(256) })),
     async (c) => {
-        const db = createDb(c.env.DB);
         const { id } = c.req.valid("param");
+        // パスワード総当たり対策（Office Hour + IP 単位）。events 側と揃える。
+        const allowed = await enforceRateLimit(c.env.AUTH_RATE_LIMITER, `oh-auth:${id}:${clientIp(c)}`);
+        if (!allowed) {
+            return c.json({ error: "試行回数が多すぎます。しばらくしてから再度お試しください。" }, 429);
+        }
+        const db = createDb(c.env.DB);
         const { password } = c.req.valid("json");
         const row = await db.query.officeHours.findFirst({
             where: eq(officeHours.id, id),
             columns: { adminPasswordHash: true, adminAccessToken: true },
         });
         if (!row) return c.json({ error: "Office Hour not found" }, 404);
-        const ok = await verifyPassword(password, row.adminPasswordHash);
-        if (!ok) return c.json({ error: "Invalid password" }, 401);
+        const result = await verifyPassword(password, row.adminPasswordHash);
+        if (!result.ok) return c.json({ error: "Invalid password" }, 401);
+        if (result.needsRehash) {
+            try {
+                const upgraded = await createPasswordHash(password);
+                await db.update(officeHours).set({ adminPasswordHash: upgraded }).where(eq(officeHours.id, id));
+            } catch (e) {
+                console.error("[oh admin-auth] hash upgrade failed:", e);
+            }
+        }
         c.header(
             "Set-Cookie",
-            `${COOKIE_NAMES.ADMIN_PREFIX}${id}=${row.adminAccessToken}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=2592000`
+            `${COOKIE_NAMES.ADMIN_PREFIX}${id}=${row.adminAccessToken}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=2592000`
         );
         return c.json({ ok: true });
     }

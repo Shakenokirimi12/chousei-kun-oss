@@ -102,3 +102,31 @@ export function createCookieHeader(
 export function clearCookieHeader(name: string, path = "/"): string {
     return createCookieHeader(name, "", { maxAge: 0, path });
 }
+
+/**
+ * CSRF 防御。状態変更系（POST/PATCH/DELETE）でリクエスト元のスキーム+ホストが
+ * 自身と一致しない場合に拒否する。SameSite=Lax cookie と併用して二重防御。
+ *
+ * - Origin ヘッダがあればそれを優先。
+ * - 無い場合 Referer ヘッダのスキーム+ホスト部を見る。
+ * - どちらも無い場合は古いユーザーエージェント等の可能性があるため許可
+ *   （API クライアントを完全に締め出すほどの厳格化はしない）。
+ */
+export function isSameOrigin(c: Context): boolean {
+    const reqUrl = new URL(c.req.url);
+    const selfOrigin = `${reqUrl.protocol}//${reqUrl.host}`;
+
+    const origin = c.req.header("origin");
+    if (origin) return origin === selfOrigin;
+
+    const referer = c.req.header("referer");
+    if (referer) {
+        try {
+            const refUrl = new URL(referer);
+            return `${refUrl.protocol}//${refUrl.host}` === selfOrigin;
+        } catch {
+            return false;
+        }
+    }
+    return true; // ヘッダ無し: 許可
+}
