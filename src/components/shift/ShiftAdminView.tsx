@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
     Loader2,
     AlertCircle,
+    AlertTriangle,
     Eye,
     EyeOff,
     Save,
@@ -13,6 +14,8 @@ import {
     Link2,
     Check,
     Ban,
+    Wand2,
+    Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +26,8 @@ import {
     msToDayMin,
     formatMinutes,
     formatDay,
+    rangesOverlap,
+    slotIsNg,
     type ShiftAdminView as AdminView,
 } from "@/lib/shift";
 import { ShiftLaneGantt, type Lane } from "./ShiftLaneGantt";
@@ -37,8 +42,8 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
     const [data, setData] = React.useState<AdminView | null>(null);
     const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
 
-    // 日ごとのレーン（役割）配列。
     const [dayLanes, setDayLanes] = React.useState<Record<number, Lane[]>>({});
+    const [assign, setAssign] = React.useState<Map<string, Set<string>>>(new Map());
     const [dirty, setDirty] = React.useState(false);
 
     const [password, setPassword] = React.useState("");
@@ -69,6 +74,14 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
         const lanesByDay: Record<number, Lane[]> = {};
         for (const di of Object.keys(byDay)) lanesByDay[Number(di)] = [...byDay[Number(di)].values()];
         setDayLanes(lanesByDay);
+
+        const m = new Map<string, Set<string>>();
+        for (const a of view.assignments) {
+            const set = m.get(a.slotId) ?? new Set<string>();
+            set.add(a.memberId);
+            m.set(a.slotId, set);
+        }
+        setAssign(m);
         setDirty(false);
     };
 
@@ -126,6 +139,19 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
         setDirty(true);
     };
 
+    const toggleAssign = (segId: string, memberId: string) => {
+        setAssign((prev) => {
+            const next = new Map(prev);
+            const set = new Set(next.get(segId) ?? []);
+            // eslint-disable-next-line drizzle/enforce-delete-with-where -- JS Set, not a Drizzle query
+            if (set.has(memberId)) set.delete(memberId);
+            else set.add(memberId);
+            next.set(segId, set);
+            return next;
+        });
+        setDirty(true);
+    };
+
     const save = React.useCallback(async () => {
         if (!data) return;
         setSaving(true);
@@ -140,6 +166,7 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                 capacity: number;
                 sortOrder: number;
             }[] = [];
+            const liveIds = new Set<string>();
             let order = 0;
             for (const diStr of Object.keys(dayLanes)) {
                 const di = Number(diStr);
@@ -147,6 +174,7 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                 const mid = days[di];
                 for (const lane of dayLanes[di]) {
                     for (const seg of lane.segments) {
+                        liveIds.add(seg.id);
                         payloadSlots.push({
                             id: seg.id,
                             startsAt: dayMinToMs(mid, seg.startMin),
@@ -159,19 +187,31 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                     }
                 }
             }
-            const res = await fetch(`/api/shifts/${boardId}`, {
+            const slotRes = await fetch(`/api/shifts/${boardId}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ slots: payloadSlots }),
             });
-            if (!res.ok) throw new Error();
+            if (!slotRes.ok) throw new Error();
+
+            const pairs: { slotId: string; memberId: string }[] = [];
+            for (const [segId, set] of assign) {
+                if (!liveIds.has(segId)) continue;
+                for (const memberId of set) pairs.push({ slotId: segId, memberId });
+            }
+            const asgRes = await fetch(`/api/shifts/${boardId}/assignments`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ assignments: pairs }),
+            });
+            if (!asgRes.ok) throw new Error();
             setDirty(false);
         } catch {
             setErrorMsg("保存に失敗しました。");
         } finally {
             setSaving(false);
         }
-    }, [data, dayLanes, boardId]);
+    }, [data, dayLanes, assign, boardId]);
 
     const togglePublish = async () => {
         if (!data) return;
@@ -257,6 +297,147 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
     const isPublished = board.status === "published";
     const day = Math.min(activeDay, Math.max(0, days.length - 1));
 
+    // 全区分の絶対時間・定員・役割（割当の NG/重複/容量判定に使う）。
+    const segInfo = new Map<string, { startsAt: number; endsAt: number; capacity: number; role: string }>();
+    for (const diStr of Object.keys(dayLanes)) {
+        const di = Number(diStr);
+        if (di >= days.length) continue;
+        const mid = days[di];
+        for (const lane of dayLanes[di]) {
+            for (const seg of lane.segments) {
+                segInfo.set(seg.id, {
+                    startsAt: dayMinToMs(mid, seg.startMin),
+                    endsAt: dayMinToMs(mid, seg.endMin),
+                    capacity: seg.capacity,
+                    role: lane.role,
+                });
+            }
+        }
+    }
+
+    const memberById = new Map(members.map((m) => [m.id, m]));
+    const load_ = new Map<string, number>();
+    const memberSegs = new Map<string, string[]>();
+    for (const [segId, set] of assign) {
+        if (!segInfo.has(segId)) continue;
+        for (const mid of set) {
+            load_.set(mid, (load_.get(mid) ?? 0) + 1);
+            (memberSegs.get(mid) ?? memberSegs.set(mid, []).get(mid)!).push(segId);
+        }
+    }
+    const conflictAt = (segId: string, memberId: string): boolean => {
+        const info = segInfo.get(segId);
+        if (!info) return false;
+        return (memberSegs.get(memberId) ?? []).some((other) => {
+            if (other === segId) return false;
+            const o = segInfo.get(other);
+            return o ? rangesOverlap(info.startsAt, info.endsAt, o.startsAt, o.endsAt) : false;
+        });
+    };
+
+    const runAutoAssign = () => {
+        const ordered = [...segInfo.entries()].sort((a, b) => a[1].startsAt - b[1].startsAt);
+        const ld = new Map<string, number>(members.map((m) => [m.id, 0]));
+        const spans = new Map<string, { s: number; e: number }[]>();
+        const next = new Map<string, Set<string>>();
+        for (const [segId, info] of ordered) {
+            const cands = members
+                .filter((m) => !slotIsNg({ startsAt: info.startsAt, endsAt: info.endsAt }, m.unavailableRanges))
+                .filter((m) => !(spans.get(m.id) ?? []).some((sp) => rangesOverlap(info.startsAt, info.endsAt, sp.s, sp.e)))
+                .sort((x, y) => (ld.get(x.id)! - ld.get(y.id)!));
+            const set = new Set<string>();
+            for (const m of cands.slice(0, info.capacity)) {
+                set.add(m.id);
+                ld.set(m.id, ld.get(m.id)! + 1);
+                (spans.get(m.id) ?? spans.set(m.id, []).get(m.id)!).push({ s: info.startsAt, e: info.endsAt });
+            }
+            next.set(segId, set);
+        }
+        setAssign(next);
+        setDirty(true);
+    };
+
+    // 警告（時間重複の二重割当・NG時間帯への割当）。
+    const overlapWarnings: string[] = [];
+    const ngWarnings: string[] = [];
+    for (const m of members) {
+        const segs = (memberSegs.get(m.id) ?? []).map((id) => ({ id, info: segInfo.get(id)! })).filter((x) => x.info);
+        segs.sort((a, b) => a.info.startsAt - b.info.startsAt);
+        for (let i = 0; i < segs.length; i++) {
+            if (slotIsNg({ startsAt: segs[i].info.startsAt, endsAt: segs[i].info.endsAt }, m.unavailableRanges))
+                ngWarnings.push(`${m.name}: NG時間帯に割当（${segs[i].info.role}）`);
+            for (let j = i + 1; j < segs.length; j++)
+                if (rangesOverlap(segs[i].info.startsAt, segs[i].info.endsAt, segs[j].info.startsAt, segs[j].info.endsAt))
+                    overlapWarnings.push(`${m.name}: 時間が重なる割当（${segs[i].info.role} / ${segs[j].info.role}）`);
+        }
+    }
+
+    const assignedCount = (segId: string) => assign.get(segId)?.size ?? 0;
+
+    const renderSegmentAssign = (segId: string) => {
+        const info = segInfo.get(segId);
+        if (!info) return null;
+        const assigned = assign.get(segId) ?? new Set<string>();
+        const over = assigned.size > info.capacity;
+        const byDept = new Map<string, typeof members>();
+        for (const m of members) {
+            const key = m.department && m.department.length > 0 ? m.department : "（部署なし）";
+            (byDept.get(key) ?? byDept.set(key, []).get(key)!).push(m);
+        }
+        const deptNames = [...byDept.keys()].sort((a, b) => a.localeCompare(b, "ja"));
+        const isNg = (mid: string) => {
+            const m = memberById.get(mid);
+            return m ? slotIsNg({ startsAt: info.startsAt, endsAt: info.endsAt }, m.unavailableRanges) : false;
+        };
+        return (
+            <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">この時間に割り当てるメンバー</span>
+                    <span className={cn("flex items-center gap-1 text-xs", over ? "text-amber-600" : "text-muted-foreground")}>
+                        <Users className="size-3" />
+                        {assigned.size}/{info.capacity}
+                    </span>
+                </div>
+                {members.length === 0 && <p className="text-xs text-muted-foreground">回答メンバーがいません。</p>}
+                {deptNames.map((dept) => {
+                    const ms = byDept.get(dept)!.slice().sort((a, b) => Number(isNg(a.id)) - Number(isNg(b.id)));
+                    return (
+                        <div key={dept}>
+                            <div className="mb-1 text-xs font-medium text-muted-foreground">{dept}</div>
+                            <div className="flex flex-wrap gap-1.5">
+                                {ms.map((m) => {
+                                    const ng = isNg(m.id);
+                                    const on = assigned.has(m.id);
+                                    const conflict = on && conflictAt(segId, m.id);
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={m.id}
+                                            disabled={ng && !on}
+                                            onClick={() => toggleAssign(segId, m.id)}
+                                            title={ng ? "本人の NG 時間帯と重なる" : undefined}
+                                            className={cn(
+                                                "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                                                ng && !on && "cursor-not-allowed border-destructive/30 bg-destructive/5 text-destructive/60 line-through",
+                                                on && !conflict && "border-primary bg-primary text-primary-foreground",
+                                                on && conflict && "border-amber-500 bg-amber-400/80 text-amber-950",
+                                                !on && !ng && "border-border bg-background hover:border-primary/50 hover:bg-accent"
+                                            )}
+                                        >
+                                            {ng && <Ban className="size-3" />}
+                                            {m.name}
+                                            <span className="opacity-60">({load_.get(m.id) ?? 0})</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
     return (
         <div className="w-full space-y-6 px-6 py-10 lg:px-12">
             <header className="space-y-2">
@@ -278,6 +459,9 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                     ・ {formatMinutes(board.dayStartMin)}–{formatMinutes(board.dayEndMin)} ・ 回答 {members.length} 名
                 </p>
                 <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" onClick={runAutoAssign} className="gap-1" disabled={segInfo.size === 0}>
+                        <Wand2 className="size-4" /> 自動割当
+                    </Button>
                     <Button size="sm" onClick={save} disabled={saving || !dirty} className="gap-1">
                         {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                         {dirty ? "保存" : "保存済み"}
@@ -315,7 +499,17 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                 </div>
             )}
 
-            {/* 日タブ */}
+            {(overlapWarnings.length > 0 || ngWarnings.length > 0) && (
+                <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-800">
+                    <div className="flex items-center gap-1.5 font-medium">
+                        <AlertTriangle className="size-4" /> 割当の警告
+                    </div>
+                    {[...new Set([...overlapWarnings, ...ngWarnings])].map((w, i) => (
+                        <div key={i}>{w}</div>
+                    ))}
+                </div>
+            )}
+
             {days.length > 1 && (
                 <div className="flex flex-wrap gap-1">
                     {days.map((d, i) => (
@@ -337,7 +531,7 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
 
             <p className="text-xs text-muted-foreground">
                 1 行 = 役割。行に時間区分を横に並べます（例: 受付 = 10:00–11:00, 11:00–12:00…）。
-                バーはドラッグで移動・端で時間調整、クリックで編集。
+                バーはドラッグで移動・端で時間調整、<b>クリックで時間編集とメンバー割当</b>。
             </p>
 
             <ShiftLaneGantt
@@ -345,31 +539,9 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                 axisEndMin={board.dayEndMin}
                 lanes={dayLanes[day] ?? []}
                 onChange={(lanes) => setLanesForDay(day, lanes)}
+                assignedCount={assignedCount}
+                renderSegmentAssign={renderSegmentAssign}
             />
-
-            {/* 回答メンバー一覧（割当は別ステップ。ここでは参照のみ） */}
-            <details className="rounded-lg border p-3">
-                <summary className="cursor-pointer text-sm font-medium">回答メンバー {members.length} 名</summary>
-                <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
-                    {members.map((m) => (
-                        <div key={m.id} className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-xs">
-                            <span className="truncate">
-                                {m.name}
-                                {m.department && <span className="ml-1 text-muted-foreground">/ {m.department}</span>}
-                            </span>
-                            {m.unavailableRanges.length > 0 && (
-                                <span className="flex shrink-0 items-center gap-0.5 text-destructive">
-                                    <Ban className="size-3" />
-                                    {m.unavailableRanges.length}
-                                </span>
-                            )}
-                        </div>
-                    ))}
-                    {members.length === 0 && (
-                        <p className="text-xs text-muted-foreground">まだ回答がありません。</p>
-                    )}
-                </div>
-            </details>
         </div>
     );
 }

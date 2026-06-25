@@ -48,11 +48,17 @@ export function ShiftLaneGantt({
     axisEndMin,
     lanes,
     onChange,
+    assignedCount,
+    renderSegmentAssign,
 }: {
     axisStartMin: number;
     axisEndMin: number;
     lanes: Lane[];
     onChange: (lanes: Lane[]) => void;
+    /** 区分の割当人数（バー表示・ダイアログ見出し用）。 */
+    assignedCount?: (segId: string) => number;
+    /** 区分編集ダイアログ内に差し込む割当UI（メンバー選択など）。 */
+    renderSegmentAssign?: (segId: string) => React.ReactNode;
 }) {
     const lanesRef = React.useRef(lanes);
     lanesRef.current = lanes;
@@ -240,7 +246,9 @@ export function ShiftLaneGantt({
                                                 />
                                                 <span className="pointer-events-none flex-1 truncate px-0.5 text-center">
                                                     {formatMinutes(s.startMin)}–{formatMinutes(s.endMin)}
-                                                    <span className="ml-1 text-muted-foreground">×{s.capacity}</span>
+                                                    <span className="ml-1 text-muted-foreground">
+                                                        {assignedCount ? `${assignedCount(s.id)}/${s.capacity}` : `×${s.capacity}`}
+                                                    </span>
                                                 </span>
                                                 <span
                                                     onPointerDown={(e) => beginDrag(e, lane.laneId, s.id, "end")}
@@ -272,7 +280,7 @@ export function ShiftLaneGantt({
             </Button>
 
             <Dialog open={!!editingSeg} onOpenChange={(o) => !o && setEditing(null)}>
-                <DialogContent className="sm:max-w-sm">
+                <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
                     {editingSeg && editing && (
                         <>
                             <DialogHeader>
@@ -333,6 +341,10 @@ export function ShiftLaneGantt({
                                     />
                                 </label>
                             </div>
+                            {renderSegmentAssign && (
+                                <div className="border-t pt-3">{renderSegmentAssign(editingSeg.id)}</div>
+                            )}
+
                             <div className="flex justify-between border-t pt-3">
                                 <Button
                                     variant="ghost"
