@@ -213,6 +213,27 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
         }
     }, [data, dayLanes, assign, boardId]);
 
+    // --- 自動保存（定期フラッシュ + タブ離脱時） ---
+    const saveRef = React.useRef(save);
+    saveRef.current = save;
+    const flushRef = React.useRef({ dirty, saving });
+    flushRef.current = { dirty, saving };
+    React.useEffect(() => {
+        if (phase !== "ready") return;
+        const tick = () => {
+            if (flushRef.current.dirty && !flushRef.current.saving) void saveRef.current();
+        };
+        const id = setInterval(tick, 15000);
+        const onHide = () => {
+            if (document.visibilityState === "hidden") tick();
+        };
+        document.addEventListener("visibilitychange", onHide);
+        return () => {
+            clearInterval(id);
+            document.removeEventListener("visibilitychange", onHide);
+        };
+    }, [phase]);
+
     const togglePublish = async () => {
         if (!data) return;
         const next = data.board.status !== "published";
@@ -392,16 +413,64 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
         if (!info) return null;
         const assigned = assign.get(segId) ?? new Set<string>();
         const over = assigned.size > info.capacity;
-        const byDept = new Map<string, typeof members>();
-        for (const m of members) {
-            const key = m.department && m.department.length > 0 ? m.department : "（部署なし）";
-            (byDept.get(key) ?? byDept.set(key, []).get(key)!).push(m);
-        }
-        const deptNames = [...byDept.keys()].sort((a, b) => a.localeCompare(b, "ja"));
         const isNg = (mid: string) => {
             const m = memberById.get(mid);
             return m ? slotIsNg({ startsAt: info.startsAt, endsAt: info.endsAt }, m.unavailableRanges) : false;
         };
+        // overlap = 他の枠（重なる時間）に割当済み。
+        const isOverlap = (mid: string) => conflictAt(segId, mid);
+
+        // 共通のメンバーチップ。demoted は下段（重複/NG）用に弱め＆重複追加は確認を挟む。
+        const chip = (m: (typeof members)[number]) => {
+            const ng = isNg(m.id);
+            const overlap = isOverlap(m.id);
+            const on = assigned.has(m.id);
+            const handleClick = () => {
+                if (!on) {
+                    if (ng) return;
+                    if (overlap && !window.confirm(`${m.name} さんは時間が重なる枠に割当済みです。重複して割り当てますか？`))
+                        return;
+                }
+                toggleAssign(segId, m.id);
+            };
+            return (
+                <button
+                    type="button"
+                    key={m.id}
+                    disabled={ng && !on}
+                    onClick={handleClick}
+                    title={ng ? "本人の NG 時間帯と重なる" : overlap ? "他の枠と時間が重複" : undefined}
+                    className={cn(
+                        "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                        ng && !on && "cursor-not-allowed border-destructive/30 bg-destructive/5 text-destructive/60 line-through",
+                        on && overlap && "border-amber-500 bg-amber-400/80 text-amber-950",
+                        on && !overlap && "border-primary bg-primary text-primary-foreground",
+                        !on && overlap && !ng && "border-dashed border-amber-400/60 bg-amber-50 text-amber-700/80 hover:bg-amber-100",
+                        !on && !overlap && !ng && "border-border bg-background hover:border-primary/50 hover:bg-accent"
+                    )}
+                >
+                    {ng ? <Ban className="size-3" /> : overlap ? <AlertTriangle className="size-3" /> : null}
+                    {m.name}
+                    {m.department && <span className="opacity-50">/{m.department}</span>}
+                    <span className="opacity-60">({load_.get(m.id) ?? 0})</span>
+                </button>
+            );
+        };
+
+        // 割当可能（NGでなく時間重複もない）= 上段、部署別。
+        const available = members.filter((m) => !isNg(m.id) && !isOverlap(m.id));
+        // 他の枠と重複・NG = 下段（選択非推奨）。
+        const demoted = members
+            .filter((m) => isNg(m.id) || isOverlap(m.id))
+            .sort((a, b) => Number(isNg(a.id)) - Number(isNg(b.id))); // 重複→NGの順
+
+        const byDept = new Map<string, typeof members>();
+        for (const m of available) {
+            const key = m.department && m.department.length > 0 ? m.department : "（部署なし）";
+            (byDept.get(key) ?? byDept.set(key, []).get(key)!).push(m);
+        }
+        const deptNames = [...byDept.keys()].sort((a, b) => a.localeCompare(b, "ja"));
+
         return (
             <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm">
@@ -412,41 +481,26 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                     </span>
                 </div>
                 {members.length === 0 && <p className="text-xs text-muted-foreground">回答メンバーがいません。</p>}
-                {deptNames.map((dept) => {
-                    const ms = byDept.get(dept)!.slice().sort((a, b) => Number(isNg(a.id)) - Number(isNg(b.id)));
-                    return (
-                        <div key={dept}>
-                            <div className="mb-1 text-xs font-medium text-muted-foreground">{dept}</div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {ms.map((m) => {
-                                    const ng = isNg(m.id);
-                                    const on = assigned.has(m.id);
-                                    const conflict = on && conflictAt(segId, m.id);
-                                    return (
-                                        <button
-                                            type="button"
-                                            key={m.id}
-                                            disabled={ng && !on}
-                                            onClick={() => toggleAssign(segId, m.id)}
-                                            title={ng ? "本人の NG 時間帯と重なる" : undefined}
-                                            className={cn(
-                                                "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors",
-                                                ng && !on && "cursor-not-allowed border-destructive/30 bg-destructive/5 text-destructive/60 line-through",
-                                                on && !conflict && "border-primary bg-primary text-primary-foreground",
-                                                on && conflict && "border-amber-500 bg-amber-400/80 text-amber-950",
-                                                !on && !ng && "border-border bg-background hover:border-primary/50 hover:bg-accent"
-                                            )}
-                                        >
-                                            {ng && <Ban className="size-3" />}
-                                            {m.name}
-                                            <span className="opacity-60">({load_.get(m.id) ?? 0})</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
+
+                {deptNames.map((dept) => (
+                    <div key={dept}>
+                        <div className="mb-1 text-xs font-medium text-muted-foreground">{dept}</div>
+                        <div className="flex flex-wrap gap-1.5">{byDept.get(dept)!.map(chip)}</div>
+                    </div>
+                ))}
+                {available.length === 0 && members.length > 0 && (
+                    <p className="text-xs text-muted-foreground">この時間に空いているメンバーがいません。</p>
+                )}
+
+                {demoted.length > 0 && (
+                    <div className="mt-3 border-t pt-2">
+                        <div className="mb-1 flex items-center gap-1 text-xs font-medium text-amber-700">
+                            <AlertTriangle className="size-3" />
+                            他の枠と重複・NG（選択非推奨）
                         </div>
-                    );
-                })}
+                        <div className="flex flex-wrap gap-1.5">{demoted.map(chip)}</div>
+                    </div>
+                )}
             </div>
         );
     };
