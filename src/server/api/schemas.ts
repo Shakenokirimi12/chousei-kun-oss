@@ -144,3 +144,63 @@ export const bookOfficeHourSchema = z.object({
     email: z.string().email().max(254).optional().or(z.literal("")).default(""),
     userId: z.string().uuid().optional(),
 });
+
+// --- シフト調整 ---
+
+/** 作成・編集時のシフト枠。id 付きは既存枠の更新、無しは新規作成として扱う。 */
+const shiftSlotInputSchema = z.object({
+    id: z.string().uuid().optional(),
+    startsAt: z.number().int(),         // ms epoch
+    endsAt: z.number().int(),           // ms epoch
+    role: z.string().trim().min(1).max(100),
+    place: z.string().trim().max(100).optional().default(""),
+    capacity: z.number().int().min(1).max(1000),
+    sortOrder: z.number().int().min(0).max(10000).optional().default(0),
+}).refine((s) => s.endsAt > s.startsAt, "endsAt must be after startsAt");
+
+export const createShiftBoardSchema = z.object({
+    title: z.string().trim().min(1).max(200),
+    description: z.string().max(2000).optional().default(""),
+    date: z.number().int(),             // 対象日 JST 0:00 ms
+    submissionDeadline: z.number().int().nullable().optional(),
+    slots: z.array(shiftSlotInputSchema).min(1).max(500),
+    adminPassword: z.string().min(8).max(256),
+    creatorUserId: z.string().uuid().optional(),
+});
+
+export const updateShiftBoardSchema = z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    description: z.string().max(2000).optional(),
+    date: z.number().int().optional(),
+    submissionDeadline: z.number().int().nullable().optional(),
+    slots: z.array(shiftSlotInputSchema).min(1).max(500).optional(),
+});
+
+export const shiftBoardIdParamSchema = z.object({
+    id: z.string().uuid(),
+});
+
+export const ownShiftMemberParamSchema = z.object({
+    id: z.string().uuid(),
+    memberId: z.string().uuid(),
+});
+
+/** メンバーの NG 申告（出られない枠の id 配列）。userId で本人を識別し再提出を許す。 */
+export const submitShiftMemberSchema = z.object({
+    name: z.string().trim().min(1).max(100),
+    comment: z.string().max(1000).optional().default(""),
+    memberId: z.string().uuid().optional(),
+    userId: z.string().uuid().optional(),
+    unavailableSlotIds: z.array(z.string().uuid()).max(500).default([]),
+});
+
+/** 管理者による割当の一括置換。(slotId, memberId) のペア配列。 */
+export const setShiftAssignmentsSchema = z.object({
+    assignments: z
+        .array(z.object({ slotId: z.string().uuid(), memberId: z.string().uuid() }))
+        .max(5000),
+});
+
+export const publishShiftBoardSchema = z.object({
+    published: z.boolean(),
+});

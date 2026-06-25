@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { sValidator } from "@hono/standard-validator";
-import { eventsRoutes, googleRoutes, usersRoutes, officeHoursRoutes, adminRoutes } from "./routes";
+import { eventsRoutes, googleRoutes, usersRoutes, officeHoursRoutes, shiftsRoutes, adminRoutes } from "./routes";
 import { syncCalendarSchema, syncICalSchema } from "./schemas";
 import { CampusSquareService } from "@/lib/campus-square";
 import { parseICal } from "@/lib/ical";
@@ -18,6 +18,7 @@ apiApp.route("/events", eventsRoutes);
 apiApp.route("/google", googleRoutes);
 apiApp.route("/users", usersRoutes);
 apiApp.route("/office-hours", officeHoursRoutes);
+apiApp.route("/shifts", shiftsRoutes);
 apiApp.route("/admin", adminRoutes);
 
 apiApp.post("/sync-calendar", sValidator("json", syncCalendarSchema), async (c) => {
