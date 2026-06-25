@@ -210,8 +210,17 @@ export function ShiftLaneGantt({
                                         type="button"
                                         variant="ghost"
                                         size="icon-xs"
-                                        title="この行を削除"
-                                        onClick={() => removeLane(lane.laneId)}
+                                        title="この行（役割）を削除（Ctrl/⌘+クリックで確認なし）"
+                                        onClick={(e) => {
+                                            if (
+                                                e.metaKey ||
+                                                e.ctrlKey ||
+                                                window.confirm(
+                                                    `「${lane.role || "この行"}」を削除しますか？\n含まれる時間区分もすべて削除されます。`
+                                                )
+                                            )
+                                                removeLane(lane.laneId);
+                                        }}
                                     >
                                         <Trash2 className="size-3.5 text-destructive" />
                                     </Button>
@@ -385,7 +394,15 @@ export function ShiftLaneGantt({
                                 <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => removeSegment(editing.laneId, editingSeg.id)}
+                                    title="Ctrl/⌘+クリックで確認なし"
+                                    onClick={(e) => {
+                                        if (
+                                            e.metaKey ||
+                                            e.ctrlKey ||
+                                            window.confirm("この時間区分を削除しますか？")
+                                        )
+                                            removeSegment(editing.laneId, editingSeg.id);
+                                    }}
                                     className="gap-1 text-destructive"
                                 >
                                     <Trash2 className="size-4" /> 区分を削除
