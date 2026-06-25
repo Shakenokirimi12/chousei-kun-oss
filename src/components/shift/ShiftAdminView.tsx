@@ -31,6 +31,8 @@ import {
     type ShiftAdminView as AdminView,
 } from "@/lib/shift";
 import { ShiftLaneGantt, type Lane } from "./ShiftLaneGantt";
+import { ShiftMemberGantt, type MemberRow } from "./ShiftMemberGantt";
+import { SegmentDialog, type SegmentDialogData } from "./SegmentDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 type Phase = "loading" | "auth" | "ready" | "error";
@@ -55,6 +57,9 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
     const [copied, setCopied] = React.useState(false);
     const [activeDay, setActiveDay] = React.useState(0);
     const [confirmDelete, setConfirmDelete] = React.useState(false);
+    const [viewMode, setViewMode] = React.useState<"role" | "member">("role");
+    const [openSegId, setOpenSegId] = React.useState<string | null>(null);
+    const [segDeleteId, setSegDeleteId] = React.useState<string | null>(null);
 
     const hydrate = (view: AdminView) => {
         const byDay: Record<number, Map<string, Lane>> = {};
@@ -139,6 +144,54 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
     const setLanesForDay = (di: number, lanes: Lane[]) => {
         setDayLanes((prev) => ({ ...prev, [di]: lanes }));
         setDirty(true);
+    };
+
+    // 区分（セグメント）を id 指定で更新/削除（全日横断）。SegmentDialog から使う。
+    const patchSegmentById = (segId: string, p: Partial<SegmentDialogData>) => {
+        setDayLanes((prev) => {
+            const next: Record<number, Lane[]> = {};
+            for (const k of Object.keys(prev)) {
+                const di = Number(k);
+                next[di] = prev[di].map((l) => ({
+                    ...l,
+                    segments: l.segments.map((s) =>
+                        s.id === segId
+                            ? {
+                                  ...s,
+                                  ...(p.startMin !== undefined ? { startMin: p.startMin } : {}),
+                                  ...(p.endMin !== undefined ? { endMin: p.endMin } : {}),
+                                  ...(p.place !== undefined ? { place: p.place } : {}),
+                                  ...(p.capacity !== undefined ? { capacity: p.capacity } : {}),
+                              }
+                            : s
+                    ),
+                }));
+            }
+            return next;
+        });
+        setDirty(true);
+    };
+    const removeSegmentById = (segId: string) => {
+        setDayLanes((prev) => {
+            const next: Record<number, Lane[]> = {};
+            for (const k of Object.keys(prev)) {
+                const di = Number(k);
+                next[di] = prev[di].map((l) => ({ ...l, segments: l.segments.filter((s) => s.id !== segId) }));
+            }
+            return next;
+        });
+        setAssign((prev) => {
+            const n = new Map(prev);
+            // eslint-disable-next-line drizzle/enforce-delete-with-where -- JS Map, not a Drizzle query
+            n.delete(segId);
+            return n;
+        });
+        setDirty(true);
+        setOpenSegId(null);
+    };
+    const askSegDelete = (e: React.MouseEvent, segId: string) => {
+        if (e.metaKey || e.ctrlKey) removeSegmentById(segId);
+        else setSegDeleteId(segId);
     };
 
     const toggleAssign = (segId: string, memberId: string) => {
@@ -506,6 +559,51 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
         );
     };
 
+    // 人ビュー用: アクティブ日の各メンバーの割当バー。
+    const daySegList = (dayLanes[day] ?? []).flatMap((lane) =>
+        lane.segments.map((seg) => ({ ...seg, role: lane.role }))
+    );
+    const memberRows: MemberRow[] = members
+        .map((m) => ({
+            id: m.id,
+            name: m.name,
+            department: m.department,
+            bars: daySegList
+                .filter((s) => assign.get(s.id)?.has(m.id))
+                .map((s) => ({
+                    segId: s.id,
+                    startMin: s.startMin,
+                    endMin: s.endMin,
+                    label: s.role || "シフト",
+                    conflict: conflictAt(s.id, m.id),
+                })),
+        }))
+        .sort(
+            (a, b) =>
+                (a.department || "").localeCompare(b.department || "", "ja") ||
+                a.name.localeCompare(b.name, "ja")
+        );
+
+    // 開いている区分（SegmentDialog 用、全日横断で検索）。
+    let openSeg: SegmentDialogData | null = null;
+    if (openSegId) {
+        for (const k of Object.keys(dayLanes)) {
+            const lane = dayLanes[Number(k)].find((l) => l.segments.some((s) => s.id === openSegId));
+            if (lane) {
+                const s = lane.segments.find((x) => x.id === openSegId)!;
+                openSeg = {
+                    id: s.id,
+                    role: lane.role,
+                    startMin: s.startMin,
+                    endMin: s.endMin,
+                    place: s.place,
+                    capacity: s.capacity,
+                };
+                break;
+            }
+        }
+    }
+
     return (
         <div className="w-full space-y-6 px-6 py-10 lg:px-12">
             <header className="space-y-2">
@@ -597,18 +695,74 @@ export function ShiftAdminView({ boardId }: { boardId: string }) {
                 </div>
             )}
 
-            <p className="text-xs text-muted-foreground">
-                1 行 = 役割。行に時間区分を横に並べます（例: 受付 = 10:00–11:00, 11:00–12:00…）。
-                バーはドラッグで移動・端で時間調整、<b>クリックで時間編集とメンバー割当</b>。
-            </p>
+            {/* ビュー切替 */}
+            <div className="inline-flex rounded-md border p-0.5 text-xs">
+                <button
+                    type="button"
+                    onClick={() => setViewMode("role")}
+                    className={cn(
+                        "rounded px-3 py-1",
+                        viewMode === "role" ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                    )}
+                >
+                    役割で見る
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setViewMode("member")}
+                    className={cn(
+                        "rounded px-3 py-1",
+                        viewMode === "member" ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+                    )}
+                >
+                    人で見る
+                </button>
+            </div>
 
-            <ShiftLaneGantt
-                axisStartMin={board.dayStartMin}
-                axisEndMin={board.dayEndMin}
-                lanes={dayLanes[day] ?? []}
-                onChange={(lanes) => setLanesForDay(day, lanes)}
-                assignedCount={assignedCount}
-                renderSegmentAssign={renderSegmentAssign}
+            {viewMode === "role" ? (
+                <>
+                    <p className="text-xs text-muted-foreground">
+                        1 行 = 役割。行に時間区分を横に並べます（例: 受付 = 10:00–11:00, 11:00–12:00…）。
+                        バーはドラッグで移動・端で時間調整、<b>クリックで時間編集とメンバー割当</b>。
+                    </p>
+                    <ShiftLaneGantt
+                        axisStartMin={board.dayStartMin}
+                        axisEndMin={board.dayEndMin}
+                        lanes={dayLanes[day] ?? []}
+                        onChange={(lanes) => setLanesForDay(day, lanes)}
+                        assignedCount={assignedCount}
+                        onActivateSegment={setOpenSegId}
+                    />
+                </>
+            ) : (
+                <>
+                    <p className="text-xs text-muted-foreground">
+                        1 行 = メンバー。その人の担当区分が表示されます。
+                        <b>バーをクリックで時間編集とメンバー割当</b>（黄=時間重複の警告）。
+                    </p>
+                    <ShiftMemberGantt
+                        axisStartMin={board.dayStartMin}
+                        axisEndMin={board.dayEndMin}
+                        rows={memberRows}
+                        onActivateSegment={setOpenSegId}
+                    />
+                </>
+            )}
+
+            <SegmentDialog
+                open={!!openSeg}
+                onOpenChange={(o) => !o && setOpenSegId(null)}
+                seg={openSeg}
+                onPatch={(p) => openSeg && patchSegmentById(openSeg.id, p)}
+                onDelete={(e) => openSeg && askSegDelete(e, openSeg.id)}
+                renderAssign={openSeg ? renderSegmentAssign(openSeg.id) : null}
+            />
+
+            <ConfirmDialog
+                open={!!segDeleteId}
+                onOpenChange={(o) => !o && setSegDeleteId(null)}
+                title="この時間区分を削除しますか？"
+                onConfirm={() => segDeleteId && removeSegmentById(segDeleteId)}
             />
 
             <ConfirmDialog

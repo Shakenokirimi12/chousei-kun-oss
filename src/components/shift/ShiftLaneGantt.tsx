@@ -3,11 +3,10 @@
 import * as React from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Plus, Trash2, Clock, Users } from "lucide-react";
+import { Plus, Trash2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMinutes, parseHm, snap, SNAP_MINUTES } from "@/lib/shift";
+import { formatMinutes, snap, SNAP_MINUTES } from "@/lib/shift";
 
 export type Segment = {
     id: string;
@@ -44,7 +43,7 @@ type DragMode = "move" | "start" | "end";
 
 /**
  * Excel 風の多段ガント。1 行 = 役割(レーン)、行内に複数の時間区分(segment)を横に並べる。
- * 区分はドラッグで移動/時間調整、クリックで編集ダイアログ。メンバー割当は扱わない。
+ * 区分はドラッグで移動/時間調整、クリックで編集（編集ダイアログは親が onActivateSegment で開く）。
  */
 export function ShiftLaneGantt({
     axisStartMin,
@@ -52,20 +51,19 @@ export function ShiftLaneGantt({
     lanes,
     onChange,
     assignedCount,
-    renderSegmentAssign,
+    onActivateSegment,
 }: {
     axisStartMin: number;
     axisEndMin: number;
     lanes: Lane[];
     onChange: (lanes: Lane[]) => void;
-    /** 区分の割当人数（バー表示・ダイアログ見出し用）。 */
+    /** 区分の割当人数（バー表示・色分け用）。 */
     assignedCount?: (segId: string) => number;
-    /** 区分編集ダイアログ内に差し込む割当UI（メンバー選択など）。 */
-    renderSegmentAssign?: (segId: string) => React.ReactNode;
+    /** 区分クリック時に親へ通知（編集ダイアログを開く）。 */
+    onActivateSegment?: (segId: string) => void;
 }) {
     const lanesRef = React.useRef(lanes);
     lanesRef.current = lanes;
-    const [editing, setEditing] = React.useState<{ laneId: string; segId: string } | null>(null);
     const [pending, setPending] = React.useState<{ title: string; description?: string; run: () => void } | null>(
         null
     );
@@ -126,7 +124,7 @@ export function ShiftLaneGantt({
         const onUp = () => {
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
-            if (!moved && mode === "move") setEditing({ laneId, segId });
+            if (!moved && mode === "move") onActivateSegment?.(segId);
         };
         window.addEventListener("pointermove", onMove);
         window.addEventListener("pointerup", onUp);
@@ -141,21 +139,12 @@ export function ShiftLaneGantt({
         const seg: Segment = { id: uid("seg"), startMin: start, endMin: end, place: last?.place ?? "", capacity: last?.capacity ?? 1 };
         onChange(lanes.map((l) => (l.laneId === laneId ? { ...l, segments: [...l.segments, seg] } : l)));
     };
-    const removeSegment = (laneId: string, segId: string) => {
-        onChange(
-            lanes.map((l) => (l.laneId === laneId ? { ...l, segments: l.segments.filter((s) => s.id !== segId) } : l))
-        );
-        setEditing(null);
-    };
     const removeLane = (laneId: string) => onChange(lanes.filter((l) => l.laneId !== laneId));
     const renameLane = (laneId: string, role: string) =>
         onChange(lanes.map((l) => (l.laneId === laneId ? { ...l, role } : l)));
 
     const hourTicks: number[] = [];
     for (let m = Math.ceil(axisStartMin / 60) * 60; m <= axisEndMin; m += 60) hourTicks.push(m);
-
-    const editingLane = editing ? lanes.find((l) => l.laneId === editing.laneId) : null;
-    const editingSeg = editingLane?.segments.find((s) => s.id === editing?.segId) ?? null;
 
     return (
         <div className="space-y-3">
@@ -336,95 +325,6 @@ export function ShiftLaneGantt({
             <Button type="button" variant="outline" size="sm" onClick={() => onChange([...lanes, newLane()])} className="gap-1">
                 <Plus className="size-4" /> 役割（行）を追加
             </Button>
-
-            <Dialog open={!!editingSeg} onOpenChange={(o) => !o && setEditing(null)}>
-                <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-                    {editingSeg && editing && (
-                        <>
-                            <DialogHeader>
-                                <DialogTitle className="flex items-center gap-2">
-                                    <Clock className="size-4 text-primary" />
-                                    {editingLane?.role || "時間区分"} の編集
-                                </DialogTitle>
-                            </DialogHeader>
-                            <div className="grid grid-cols-2 gap-3">
-                                <label className="space-y-1 text-xs">
-                                    <span className="text-muted-foreground">開始</span>
-                                    <Input
-                                        type="time"
-                                        step={SNAP_MINUTES * 60}
-                                        value={formatMinutes(Math.min(editingSeg.startMin, 1439))}
-                                        onChange={(e) => {
-                                            const m = parseHm(e.target.value);
-                                            if (m !== null && m < editingSeg.endMin)
-                                                patchSeg(editing.laneId, editingSeg.id, { startMin: m });
-                                        }}
-                                    />
-                                </label>
-                                <label className="space-y-1 text-xs">
-                                    <span className="text-muted-foreground">終了</span>
-                                    <Input
-                                        type="time"
-                                        step={SNAP_MINUTES * 60}
-                                        value={formatMinutes(Math.min(editingSeg.endMin, 1439))}
-                                        onChange={(e) => {
-                                            const m = parseHm(e.target.value);
-                                            if (m !== null && m > editingSeg.startMin)
-                                                patchSeg(editing.laneId, editingSeg.id, { endMin: m });
-                                        }}
-                                    />
-                                </label>
-                                <label className="space-y-1 text-xs">
-                                    <span className="text-muted-foreground">場所</span>
-                                    <Input
-                                        value={editingSeg.place}
-                                        onChange={(e) => patchSeg(editing.laneId, editingSeg.id, { place: e.target.value })}
-                                        placeholder="場所"
-                                    />
-                                </label>
-                                <label className="space-y-1 text-xs">
-                                    <span className="flex items-center gap-1 text-muted-foreground">
-                                        <Users className="size-3" /> 定員
-                                    </span>
-                                    <Input
-                                        type="number"
-                                        min={1}
-                                        max={1000}
-                                        value={editingSeg.capacity}
-                                        onChange={(e) =>
-                                            patchSeg(editing.laneId, editingSeg.id, {
-                                                capacity: Math.max(1, Math.min(1000, Number(e.target.value) || 1)),
-                                            })
-                                        }
-                                    />
-                                </label>
-                            </div>
-                            {renderSegmentAssign && (
-                                <div className="border-t pt-3">{renderSegmentAssign(editingSeg.id)}</div>
-                            )}
-
-                            <div className="flex justify-between border-t pt-3">
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    title="Ctrl/⌘+クリックで確認なし"
-                                    onClick={(e) => {
-                                        const lid = editing.laneId;
-                                        const sid = editingSeg.id;
-                                        ask(e, { title: "この時間区分を削除しますか？" }, () => removeSegment(lid, sid));
-                                    }}
-                                    className="gap-1 text-destructive"
-                                >
-                                    <Trash2 className="size-4" /> 区分を削除
-                                </Button>
-                                <Button size="sm" onClick={() => setEditing(null)}>
-                                    完了
-                                </Button>
-                            </div>
-                        </>
-                    )}
-                </DialogContent>
-            </Dialog>
 
             <ConfirmDialog
                 open={!!pending}
