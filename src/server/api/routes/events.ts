@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { sValidator } from "@hono/standard-validator";
 import { eq } from "drizzle-orm";
 import { createPasswordHash, verifyPassword } from "@/lib/admin-auth";
-import { createDb, type DbClient } from "@/server/db/client";
+import { createDb } from "@/server/db/client";
 import { availabilities, events, participants } from "@/server/db/schema";
 import {
     createEventSchema,
@@ -18,7 +18,6 @@ import {
 import {
     parseCookieValue,
     refreshGoogleTokenIfNeeded,
-    insertAvailabilitiesInBatches,
     parseCandidateWindow,
 } from "../utils";
 import { verifyAdminSession, isSameOrigin } from "../middleware";
@@ -49,40 +48,47 @@ eventsRoutes.use("*", async (c, next) => {
 });
 
 /**
- * 既存参加者の availability を新しい入力で取り替える。delete→insert を
- * D1 の batch() に乗せて単一 RPC で実行することで、片方だけ成功する
- * 部分失敗を防ぐ。バインドパラメータの上限を踏まえ insert はチャンク分け。
+ * 参加者の availability を入力 statuses（candidate_idx 0..N-1）でまるごと取り替える。
+ *
+ * (participant_id, candidate_idx) は複合主キーなので UPSERT で「あれば更新・無ければ
+ * 挿入」を冪等に行える。最後に candidate_idx >= statuses.length の行を消すことで、
+ * 候補数が減ったケース（管理者が候補を削除した等）の残存行も掃除する。すべて 1 つの
+ * batch() に載せ、単一 RPC・原子的に適用する。
+ *
+ * D1 のバインドパラメータ上限は 1 クエリ 100 個。UPSERT は 1 行 3 binds なので
+ * 1 チャンク 30 行 = 90 binds に抑える。
  */
-const REPLACE_AVAILABILITY_CHUNK = 50; // 1 行 4 カラム → 200 binds < D1 上限
+const REPLACE_AVAILABILITY_CHUNK = 30;
 async function replaceAvailabilities(
     d1: D1Database,
-    db: DbClient,
     participantId: string,
     statuses: number[]
 ): Promise<void> {
     const statements: D1PreparedStatement[] = [];
-    statements.push(
-        d1.prepare("DELETE FROM availabilities WHERE participant_id = ?").bind(participantId)
-    );
-    if (statuses.length > 0) {
-        for (let i = 0; i < statuses.length; i += REPLACE_AVAILABILITY_CHUNK) {
-            const chunk = statuses.slice(i, i + REPLACE_AVAILABILITY_CHUNK);
-            const placeholders = chunk.map(() => "(?, ?, ?, ?)").join(", ");
-            const binds: (string | number)[] = [];
-            chunk.forEach((status, k) => {
-                binds.push(crypto.randomUUID(), participantId, i + k, status);
-            });
-            statements.push(
-                d1.prepare(
-                    `INSERT INTO availabilities (id, participant_id, candidate_idx, status) VALUES ${placeholders}`
-                ).bind(...binds)
-            );
-        }
+    for (let i = 0; i < statuses.length; i += REPLACE_AVAILABILITY_CHUNK) {
+        const chunk = statuses.slice(i, i + REPLACE_AVAILABILITY_CHUNK);
+        const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
+        const binds: (string | number)[] = [];
+        chunk.forEach((status, k) => {
+            binds.push(participantId, i + k, status);
+        });
+        statements.push(
+            d1
+                .prepare(
+                    `INSERT INTO availabilities (participant_id, candidate_idx, status) VALUES ${placeholders}
+                     ON CONFLICT(participant_id, candidate_idx) DO UPDATE SET status = excluded.status`
+                )
+                .bind(...binds)
+        );
     }
+    // 候補数が減った場合に旧 index の行が残らないよう末尾を掃除する。
+    // statuses が空なら candidate_idx >= 0、すなわち全行削除になる。
+    statements.push(
+        d1
+            .prepare("DELETE FROM availabilities WHERE participant_id = ? AND candidate_idx >= ?")
+            .bind(participantId, statuses.length)
+    );
     await d1.batch(statements);
-    // Drizzle 経由ではなく直接 d1.prepare を使っているので、Drizzle のキャッシュは
-    // 別経路。db 引数は将来的にトランザクション API 移行する際の差し替えポイント。
-    void db;
 }
 
 
@@ -256,9 +262,6 @@ eventsRoutes.post(
             if (!existing || existing.eventId !== eventId) {
                 return c.json({ error: "Participant not found" }, 404);
             }
-            // availability の delete→insert を batch でまとめて原子化する。
-            // 直接 update を batch に混ぜると Drizzle の型整合性が崩れるので
-            // update は先に実行し、availability の取り替えは batch で行う。
             await db
                 .update(participants)
                 .set({
@@ -269,8 +272,6 @@ eventsRoutes.post(
                     notificationEmail: encEmail,
                 })
                 .where(eq(participants.id, participantId));
-
-            await replaceAvailabilities(c.env.DB, db, participantId, statuses);
         } else {
             await db.insert(participants).values({
                 id: newParticipantId,
@@ -281,17 +282,10 @@ eventsRoutes.post(
                 notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0,
                 notificationEmail: encEmail,
             });
-
-            if (statuses.length > 0) {
-                const availabilityValues = statuses.map((status, idx) => ({
-                    id: crypto.randomUUID(),
-                    participantId: newParticipantId,
-                    candidateIdx: idx,
-                    status,
-                }));
-                await insertAvailabilitiesInBatches(db, availabilityValues);
-            }
         }
+
+        // 新規・既存いずれも UPSERT で取り替える。新規は競合が無いので実質 INSERT。
+        await replaceAvailabilities(c.env.DB, newParticipantId, statuses);
 
         return c.json({ success: true, participantId: newParticipantId });
     }
@@ -511,10 +505,11 @@ eventsRoutes.get(
         const statusMap = new Map<string, number>();
         for (const a of availabilityRows) statusMap.set(`${a.participantId}:${a.candidateIdx}`, a.status);
 
+        // status: 0=× / 1=△ / 2=○（EventView と同じ正準マッピング）。未回答は "-"。
         const symbolFor = (s: number | undefined) => {
-            if (s === 1) return "○";
-            if (s === 2) return "△";
-            if (s === 3) return "×";
+            if (s === 0) return "×";
+            if (s === 1) return "△";
+            if (s === 2) return "○";
             return "-";
         };
 
@@ -592,20 +587,19 @@ eventsRoutes.patch(
         });
 
         const availabilityRows = await c.env.DB.prepare(
-            `SELECT a.id, a.participant_id, a.candidate_idx, a.status
+            `SELECT a.participant_id, a.candidate_idx, a.status
              FROM availabilities a
              JOIN participants p ON p.id = a.participant_id
              WHERE p.event_id = ?`
-        ).bind(id).all<{ id: string; participant_id: string; candidate_idx: number; status: number }>();
+        ).bind(id).all<{ participant_id: string; candidate_idx: number; status: number }>();
 
-        const remappedValues: Array<{ id: string; participantId: string; candidateIdx: number; status: number }> = [];
+        const remappedValues: Array<{ participantId: string; candidateIdx: number; status: number }> = [];
         for (const row of availabilityRows.results) {
             const oldCandidate = oldCandidates[row.candidate_idx];
             if (!oldCandidate) continue;
             const newIdx = indexMap.get(oldCandidate);
             if (newIdx === undefined) continue;
             remappedValues.push({
-                id: crypto.randomUUID(),
                 participantId: row.participant_id,
                 candidateIdx: newIdx,
                 status: row.status,
@@ -622,14 +616,14 @@ eventsRoutes.patch(
         ];
         for (let i = 0; i < remappedValues.length; i += REPLACE_AVAILABILITY_CHUNK) {
             const chunk = remappedValues.slice(i, i + REPLACE_AVAILABILITY_CHUNK);
-            const placeholders = chunk.map(() => "(?, ?, ?, ?)").join(", ");
+            const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
             const binds: (string | number)[] = [];
             chunk.forEach((row) => {
-                binds.push(row.id, row.participantId, row.candidateIdx, row.status);
+                binds.push(row.participantId, row.candidateIdx, row.status);
             });
             statements.push(
                 c.env.DB.prepare(
-                    `INSERT INTO availabilities (id, participant_id, candidate_idx, status) VALUES ${placeholders}`
+                    `INSERT INTO availabilities (participant_id, candidate_idx, status) VALUES ${placeholders}`
                 ).bind(...binds)
             );
         }
@@ -755,14 +749,21 @@ eventsRoutes.post(
                 body: JSON.stringify({
                     summary: `${currentEvent.title}（確定）`,
                     description: currentEvent.description ?? "調整くんで確定した日程です。",
-                    start: {
-                        dateTime: candidateWindow.startDateTime,
-                        timeZone: "Asia/Tokyo",
-                    },
-                    end: {
-                        dateTime: candidateWindow.endDateTime,
-                        timeZone: "Asia/Tokyo",
-                    },
+                    ...(candidateWindow.allDay
+                        ? {
+                              start: { date: candidateWindow.startDate },
+                              end: { date: candidateWindow.endDateExclusive },
+                          }
+                        : {
+                              start: {
+                                  dateTime: candidateWindow.startDateTime,
+                                  timeZone: "Asia/Tokyo",
+                              },
+                              end: {
+                                  dateTime: candidateWindow.endDateTime,
+                                  timeZone: "Asia/Tokyo",
+                              },
+                          }),
                     attendees: dedupedAttendees.map((target) => ({
                         email: target.email,
                         displayName: target.name,

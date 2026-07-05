@@ -16,7 +16,8 @@ import { HelpCircle, Send, Trash2, Mail, Copy, Check, ChevronDown, ChevronUp } f
 import { getActivityLogs, clearActivityLogs, formatLogsForEmail } from "@/hooks/useActivityLog";
 import { budouxify } from "@/lib/budoux";
 
-const FEEDBACK_EMAIL = "shakenokirimi12@sysadmin.soshosai.com";
+// 運用者ごとに変わる連絡先。フォーク/セルフホスト時は環境変数で差し替える。
+const FEEDBACK_EMAIL = process.env.NEXT_PUBLIC_FEEDBACK_EMAIL || "feedback@example.com";
 
 export function FeedbackButton() {
     const [isOpen, setIsOpen] = useState(false);

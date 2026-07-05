@@ -7,6 +7,7 @@ import { CalendarCheck, Loader2, ExternalLink, Copy, Check } from "lucide-react"
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { parseCandidateToDateTime } from "@/lib/ical";
+import { formatAllDayCandidateLabelLong, nextDateString } from "@/lib/candidates";
 import { budouxify } from "@/lib/budoux";
 
 type Props = {
@@ -35,7 +36,9 @@ export const ConfirmedScheduleCard = memo(function ConfirmedScheduleCard({
 
     const dateTime = parseCandidateToDateTime(confirmedCandidate);
     const formattedDateTime = dateTime
-        ? `${format(dateTime.start, "yyyy年M月d日(E) HH:mm", { locale: ja })} 〜 ${format(dateTime.end, "HH:mm", { locale: ja })}`
+        ? dateTime.allDay
+            ? formatAllDayCandidateLabelLong(confirmedCandidate)
+            : `${format(dateTime.start, "yyyy年M月d日(E) HH:mm", { locale: ja })} 〜 ${format(dateTime.end, "HH:mm", { locale: ja })}`
         : "";
 
     const handleCopyUrl = () => {
@@ -49,13 +52,15 @@ export const ConfirmedScheduleCard = memo(function ConfirmedScheduleCard({
         
         setIsAddingToGoogle(true);
         try {
-            const startIso = dateTime.start.toISOString();
-            const endIso = dateTime.end.toISOString();
-            
+            // 終日は日付のみ(排他的終了日)、それ以外はUTC日時のペア
+            const dates = dateTime.allDay
+                ? `${dateTime.date.replaceAll("-", "")}/${nextDateString(dateTime.date).replaceAll("-", "")}`
+                : `${dateTime.start.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")}/${dateTime.end.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")}`;
+
             const googleCalendarUrl = new URL("https://calendar.google.com/calendar/render");
             googleCalendarUrl.searchParams.set("action", "TEMPLATE");
             googleCalendarUrl.searchParams.set("text", eventTitle);
-            googleCalendarUrl.searchParams.set("dates", `${startIso.replace(/[-:]/g, "").replace(/\.\d{3}/, "")}/${endIso.replace(/[-:]/g, "").replace(/\.\d{3}/, "")}`);
+            googleCalendarUrl.searchParams.set("dates", dates);
             if (eventDescription) {
                 googleCalendarUrl.searchParams.set("details", eventDescription);
             }

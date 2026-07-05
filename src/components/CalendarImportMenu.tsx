@@ -58,6 +58,7 @@ export default function CalendarImportMenu({
     const [pass, setPass] = React.useState("");
     const [icalUrl, setIcalUrl] = React.useState("");
     const [submitting, setSubmitting] = React.useState(false);
+    const [submitError, setSubmitError] = React.useState<string | null>(null);
 
     const close = () => {
         setIsOpen(false);
@@ -68,14 +69,21 @@ export default function CalendarImportMenu({
             setPass("");
             setIcalUrl("");
             setSubmitting(false);
+            setSubmitError(null);
         }, 200);
     };
 
+    const errorMessage = (e: unknown) => (e instanceof Error ? e.message : "取り込みに失敗しました。もう一度お試しください。");
+
     const runGoogle = async () => {
         setSubmitting(true);
+        setSubmitError(null);
         try {
             await onGoogleImport();
             close();
+        } catch (e) {
+            console.error(e);
+            setSubmitError(errorMessage(e));
         } finally {
             setSubmitting(false);
         }
@@ -84,11 +92,13 @@ export default function CalendarImportMenu({
     const runCampus = async () => {
         if (!uid || !pass) return;
         setSubmitting(true);
+        setSubmitError(null);
         try {
             await onCampusImport(uid, pass);
             close();
         } catch (e) {
             console.error(e);
+            setSubmitError(errorMessage(e));
         } finally {
             setSubmitting(false);
         }
@@ -97,11 +107,13 @@ export default function CalendarImportMenu({
     const runICal = async () => {
         if (!icalUrl) return;
         setSubmitting(true);
+        setSubmitError(null);
         try {
             await onICalImport(icalUrl);
             close();
         } catch (e) {
             console.error(e);
+            setSubmitError(errorMessage(e));
         } finally {
             setSubmitting(false);
         }
@@ -188,9 +200,13 @@ export default function CalendarImportMenu({
                     </div>
                 )}
 
+                {submitError && (
+                    <p className="text-sm text-destructive">{submitError}</p>
+                )}
+
                 <DialogFooter className="gap-2 sm:gap-2">
                     {source !== null && (
-                        <Button variant="ghost" size="sm" onClick={() => setSource(null)} disabled={submitting}>
+                        <Button variant="ghost" size="sm" onClick={() => { setSource(null); setSubmitError(null); }} disabled={submitting}>
                             戻る
                         </Button>
                     )}

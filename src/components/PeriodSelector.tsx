@@ -7,7 +7,7 @@ import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, X, Copy, ZoomIn, ZoomOut, AlertTriangle, Info, RotateCcw } from "lucide-react";
+import { Check, X, Copy, ZoomIn, ZoomOut, AlertTriangle, Info, RotateCcw, Pencil, MousePointerClick } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 
@@ -353,14 +353,19 @@ export function PeriodSelector({
                     />
                 </div>
 
-                {/* 編集対象日のサブヘッダー + リセット — 操作の文脈を明示 */}
+                {/* 編集対象日のサブヘッダー + リセット — 操作の文脈を明示。
+                    右のタイムラインは「クリックして選んだ1日」だけが編集対象になる
+                    ため、それが視覚的にも文章的にも伝わるよう強調している。 */}
                 {focusedDate ? (
-                    <div className="rounded-md bg-accent/60 px-3 py-2 flex items-center justify-between shrink-0">
-                        <div className="flex flex-col leading-tight">
-                            <span className="text-[10px] text-muted-foreground">時間帯を編集中</span>
-                            <span className="text-sm font-semibold">
-                                {format(focusedDate, "M月d日(E)", { locale: ja })}
-                            </span>
+                    <div className="rounded-md bg-primary/10 border border-primary/30 px-3 py-2.5 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-2 leading-tight">
+                            <Pencil className="w-4 h-4 text-primary shrink-0" />
+                            <div className="flex flex-col">
+                                <span className="text-[10px] text-primary/80 font-medium">この日を編集中（右の時間軸をクリックで切替）</span>
+                                <span className="text-base font-bold text-primary">
+                                    {format(focusedDate, "M月d日(E)", { locale: ja })}
+                                </span>
+                            </div>
                         </div>
                         <Button
                             type="button"
@@ -377,6 +382,12 @@ export function PeriodSelector({
                 ) : (
                     <div className="rounded-md border border-dashed bg-card p-4 text-center text-xs text-muted-foreground shrink-0">
                         左のカレンダーから日付を選んでください
+                    </div>
+                )}
+                {viewDates.length > 1 && (
+                    <div className="flex items-start gap-2 rounded-md bg-muted/50 px-3 py-2 text-[11px] text-muted-foreground leading-snug shrink-0">
+                        <MousePointerClick className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        <span>複数の日を選んでいます。右の時間軸で<b>編集したい日の列を1回クリックして選び</b>、その列の中をクリックすると時限/時間を切り替えられます。</span>
                     </div>
                 )}
 
@@ -548,6 +559,9 @@ export function PeriodSelector({
                                             >
                                                 <span className="text-xs uppercase">{format(date, "E", { locale: ja })}</span>
                                                 <span className={cn("text-sm font-bold", isFocused && "text-primary")}>{format(date, "M/d", { locale: ja })}</span>
+                                                {!isFocused && viewDates.length > 1 && (
+                                                    <span className="text-[9px] text-muted-foreground/70 leading-none mt-0.5">クリックで編集</span>
+                                                )}
 
                                                 <Button
                                                     type="button"
@@ -757,7 +771,7 @@ export function PeriodSelector({
                 {/* Legend / Info Footer */}
                 <div className="border-t bg-muted/20 p-2 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-muted-foreground">
                     <div className="text-center sm:text-left">
-                        空いている場所をクリックして時限を選択。時間指定は左のメニューから。
+                        編集したい日の列をクリックしてから、時間軸内をクリックで時限を選択。時間指定は左のメニューから。
                         <span className="mx-2 inline-block w-3 h-3 bg-primary rounded align-middle"></span> 選択中
                         <span className="mx-2 inline-block w-3 h-3 bg-red-100 border border-red-200 dark:bg-red-900/20 rounded align-middle"></span> 予定あり
                         <span className="mx-2 inline-block w-3 h-3 bg-primary border-2 border-red-500 rounded align-middle"></span> 重複

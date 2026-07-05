@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { CircleAlert } from "lucide-react";
 
 export default function AdminLoginPage() {
     const params = useParams<{ id: string }>();
@@ -12,6 +13,7 @@ export default function AdminLoginPage() {
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
+    const [failCount, setFailCount] = useState(0);
 
     const id = params.id;
 
@@ -27,6 +29,7 @@ export default function AdminLoginPage() {
             });
             if (!res.ok) {
                 setError("パスワードが正しくありません。");
+                setFailCount((c) => c + 1);
                 return;
             }
             router.replace(`/${id}/admin`);
@@ -59,6 +62,24 @@ export default function AdminLoginPage() {
                             {loading ? "確認中..." : "ログイン"}
                         </Button>
                     </form>
+
+                    {failCount >= 2 && (
+                        <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-200 space-y-1.5">
+                            <p className="flex items-center gap-1.5 font-medium">
+                                <CircleAlert className="h-4 w-4 shrink-0" />
+                                パスワードを思い出せませんか？
+                            </p>
+                            <p>
+                                このアプリは管理者パスワードの再発行に対応していません（メールアドレス等を保存していないため）。
+                            </p>
+                            <p>
+                                回答結果は管理者パスワードなしでも「結果確認 URL」から引き続き閲覧でき、参加者は回答を続けられます。日程の確定など管理操作だけができない状態になります。
+                            </p>
+                            <p>
+                                心当たりのパスワードを試し尽くした場合は、画面右下のヘルプボタンからお問い合わせください。
+                            </p>
+                        </div>
+                    )}
                 </CardContent>
             </Card>
         </div>

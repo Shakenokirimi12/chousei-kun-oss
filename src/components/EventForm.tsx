@@ -6,7 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { PeriodSelector, CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/PeriodSelector";
+import { AllDayRangeSelector } from "@/components/AllDayRangeSelector";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { isAllDayEvent } from "@/lib/candidates";
 import { Loader2, Calendar as CalendarIcon, Check, Copy, ExternalLink, ArrowRight, X as XIcon } from "lucide-react";
+import { format } from "date-fns";
+import { ja } from "date-fns/locale";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { cn } from "@/lib/utils";
@@ -128,7 +134,12 @@ export function EventForm() {
     const [adminPassword, setAdminPassword] = React.useState("");
     const [selectedPeriods, setSelectedPeriods] = React.useState<string[]>([]);
     const [showRestoreDialog, setShowRestoreDialog] = React.useState(false);
+    const [draftSavedAt, setDraftSavedAt] = React.useState<number | null>(null);
+    // "timed": 時間帯で調整（既存） / "allday": 日毎の出欠確認（終日候補）
+    const [selectionMode, setSelectionMode] = React.useState<"timed" | "allday">("timed");
+    const [pendingMode, setPendingMode] = React.useState<"timed" | "allday" | null>(null);
     const DRAFT_KEY = "chouseikun_draft_periods";
+    const DRAFT_SAVED_AT_KEY = "chouseikun_draft_saved_at";
 
     React.useEffect(() => {
         const savedDraft = localStorage.getItem(DRAFT_KEY);
@@ -137,6 +148,8 @@ export function EventForm() {
                 const parsed = JSON.parse(savedDraft);
                 if (Array.isArray(parsed) && parsed.length > 0) {
                     setShowRestoreDialog(true);
+                    const savedAt = Number(localStorage.getItem(DRAFT_SAVED_AT_KEY));
+                    setDraftSavedAt(Number.isFinite(savedAt) && savedAt > 0 ? savedAt : null);
                 }
             } catch (e) {
                 console.error("Failed to parse draft", e);
@@ -147,6 +160,7 @@ export function EventForm() {
     React.useEffect(() => {
         if (selectedPeriods.length > 0) {
             localStorage.setItem(DRAFT_KEY, JSON.stringify(selectedPeriods));
+            localStorage.setItem(DRAFT_SAVED_AT_KEY, String(Date.now()));
         }
     }, [selectedPeriods]);
 
@@ -308,7 +322,8 @@ export function EventForm() {
             if (res.status === 401) {
                 const url = new URL(window.location.href);
                 const returnTo = encodeURIComponent(url.pathname + url.search);
-                window.location.href = `/api/google/auth/start?returnTo=${returnTo}`;
+                // 自分の予定プレビューのみ使うため read スコープに留める
+                window.location.href = `/api/google/auth/start?returnTo=${returnTo}&scope=read`;
                 return;
             }
             if (!res.ok) {
@@ -376,7 +391,9 @@ export function EventForm() {
                 if (dateA !== dateB) return dateA.localeCompare(dateB);
 
                 const getStartTime = (slot: string) => {
-                    if (slot.startsWith("P")) {
+                    if (slot === "D") {
+                        return "00:00";
+                    } else if (slot.startsWith("P")) {
                         const id = parseInt(slot.substring(1));
                         const p = CUSTOM_PERIODS.find((x) => x.id === id);
                         return p ? p.time.split("-")[0] : "00:00";
@@ -406,6 +423,7 @@ export function EventForm() {
             const data = await response.json() as { id: string };
             setCreatedEventId(data.id);
             localStorage.removeItem(DRAFT_KEY);
+            localStorage.removeItem(DRAFT_SAVED_AT_KEY);
             setIsModalOpen(false);
         } catch (error) {
             console.error(error);
@@ -475,6 +493,11 @@ export function EventForm() {
                                 管理画面で設定を行う <ExternalLink className="h-4 w-4" />
                             </Button>
                         </Link>
+                        <Link href="/" className="w-full">
+                            <Button variant="ghost" size="sm" className="w-full text-muted-foreground">
+                                ホームに戻る
+                            </Button>
+                        </Link>
                     </CardFooter>
                 </Card>
             </div>
@@ -519,9 +542,24 @@ export function EventForm() {
                 <div className="flex-1 min-h-0 relative w-full flex flex-col">
                     <div className="space-y-2 shrink-0 pb-2 top-0 bg-background/95 backdrop-blur z-10">
                         <div className="flex justify-between items-end flex-wrap gap-2">
-                            <label className="text-xs font-medium leading-none shrink-0 text-muted-foreground">
-                                候補日程の選択
-                            </label>
+                            <Tabs
+                                value={selectionMode}
+                                onValueChange={(value) => {
+                                    const next = value as "timed" | "allday";
+                                    if (next === selectionMode) return;
+                                    if (selectedPeriods.length > 0) {
+                                        setPendingMode(next);
+                                    } else {
+                                        setSelectionMode(next);
+                                    }
+                                }}
+                            >
+                                <TabsList className="h-8">
+                                    <TabsTrigger value="timed" className="text-xs">時間帯で調整</TabsTrigger>
+                                    <TabsTrigger value="allday" className="text-xs">日毎の出欠確認（終日）</TabsTrigger>
+                                </TabsList>
+                            </Tabs>
+                        {selectionMode === "timed" && (
                         <div className="flex gap-2 flex-wrap items-center">
                             <CalendarImportMenu
                                 triggerLabel="自分の予定で候補をプレビュー"
@@ -534,16 +572,24 @@ export function EventForm() {
                                 onICalImport={handleICalImport}
                             />
                         </div>
+                        )}
                         </div>
                     </div>
 
                     <div className="flex-1 min-h-0 relative bg-transparent sm:bg-card/10 sm:border rounded-lg overflow-hidden flex flex-col">
-                        <PeriodSelector
-                            selectedPeriods={selectedPeriods}
-                            onChange={setSelectedPeriods}
-                            busyPeriodIds={busyPeriodIds}
-                            busyEvents={universityBusyEvents}
-                        />
+                        {selectionMode === "timed" ? (
+                            <PeriodSelector
+                                selectedPeriods={selectedPeriods}
+                                onChange={setSelectedPeriods}
+                                busyPeriodIds={busyPeriodIds}
+                                busyEvents={universityBusyEvents}
+                            />
+                        ) : (
+                            <AllDayRangeSelector
+                                selected={selectedPeriods}
+                                onChange={setSelectedPeriods}
+                            />
+                        )}
                     </div>
                 </div>
             </div>
@@ -628,7 +674,9 @@ export function EventForm() {
                     <DialogHeader>
                         <DialogTitle>下書きの復元</DialogTitle>
                         <DialogDescription>
-                            前回選択した日程のデータが残っています。復元して続きから作成しますか？
+                            前回選択した日程のデータが残っています
+                            {draftSavedAt && `（${format(new Date(draftSavedAt), "M月d日 HH:mm", { locale: ja })} 時点）`}
+                            。復元して続きから作成しますか？
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2">
@@ -636,6 +684,7 @@ export function EventForm() {
                             variant="ghost"
                             onClick={() => {
                                 localStorage.removeItem(DRAFT_KEY);
+                                localStorage.removeItem(DRAFT_SAVED_AT_KEY);
                                 setShowRestoreDialog(false);
                             }}
                         >
@@ -645,7 +694,10 @@ export function EventForm() {
                             onClick={() => {
                                 const savedDraft = localStorage.getItem(DRAFT_KEY);
                                 if (savedDraft) {
-                                    setSelectedPeriods(JSON.parse(savedDraft));
+                                    const parsed = JSON.parse(savedDraft) as string[];
+                                    setSelectedPeriods(parsed);
+                                    // 候補形式からモードを復元（全候補が終日なら終日モード）
+                                    setSelectionMode(isAllDayEvent(parsed) ? "allday" : "timed");
                                 }
                                 setShowRestoreDialog(false);
                             }}
@@ -655,6 +707,26 @@ export function EventForm() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* モード切替の確認: 選択済み候補はモード間で互換性がないため破棄する */}
+            <ConfirmDialog
+                open={pendingMode !== null}
+                onOpenChange={(open) => {
+                    if (!open) setPendingMode(null);
+                }}
+                title="選択中の候補を破棄しますか？"
+                description={`現在選択中の${selectedPeriods.length}件の候補は、調整方法を切り替えると全て削除されます。この操作は元に戻せません。`}
+                confirmText="破棄して切り替える"
+                cancelText="このままにする"
+                onConfirm={() => {
+                    if (pendingMode) {
+                        setSelectedPeriods([]);
+                        localStorage.removeItem(DRAFT_KEY);
+                        setSelectionMode(pendingMode);
+                    }
+                    setPendingMode(null);
+                }}
+            />
 
             <Dialog open={feedback.isOpen} onOpenChange={closeFeedback}>
                 <DialogContent>

@@ -306,7 +306,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                         key={date.toISOString()}
                                         onClick={() => setFocusedDate(date)}
                                         className={cn(
-                                            "flex-1 border-r min-w-[100px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-12 group/header",
+                                            "flex-1 border-r min-w-[72px] sm:min-w-[100px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-12 group/header",
                                             isFocused ? "bg-primary/10 text-primary" : "bg-background hover:bg-muted/50"
                                         )}
                                     >
@@ -367,7 +367,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                             {viewDates.map(date => {
                                 const dateStr = format(date, "yyyy-MM-dd");
                                 return (
-                                    <div key={dateStr} className="flex-1 border-r relative min-w-[100px]">
+                                    <div key={dateStr} className="flex-1 border-r relative min-w-[72px] sm:min-w-[100px]">
                                         {/* Busy Periods (precomputed & memoized per date) */}
                                         {(() => {
                                             const merged = busyByDate.get(dateStr) ?? [];

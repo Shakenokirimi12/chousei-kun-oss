@@ -3,8 +3,10 @@ import { apiApp } from "@/server/api/app";
 
 export async function handleApiRequest(request: Request) {
     try {
-        const { env } = await getCloudflareContext();
-        const response = await apiApp.fetch(request, env);
+        const { env, ctx } = await getCloudflareContext();
+        // ctx (ExecutionContext) を Hono に渡さないと c.executionCtx が無く、
+        // onError の waitUntil(Wana 送信) が登録されず応答後に打ち切られる。
+        const response = await apiApp.fetch(request, env, ctx);
 
         // Next.js may strip headers from redirect responses returned directly.
         // Re-construct the response to ensure all headers (especially Set-Cookie) survive.

@@ -95,7 +95,7 @@ export class EventService {
         );
     }
 
-    async getAvailabilities(eventId: string): Promise<Omit<Availability, "id">[]> {
+    async getAvailabilities(eventId: string): Promise<Availability[]> {
         return this.db
             .select({
                 participantId: availabilities.participantId,

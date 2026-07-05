@@ -12,7 +12,7 @@ import {
     cookieSecurityAttr,
     refreshGoogleTokenIfNeeded,
     getGoogleSessionAndScopes,
-    GOOGLE_SCOPES,
+    resolveGoogleScopes,
     GOOGLE_CALENDAR_READ_SCOPE,
     GOOGLE_CALENDAR_WRITE_SCOPE,
 } from "../utils";
@@ -28,7 +28,7 @@ export const googleRoutes = new Hono<{ Bindings: Bindings }>();
 googleRoutes.get("/auth/start", sValidator("query", googleStartQuerySchema), async (c) => {
     const clientId = getEnvOrThrow("GOOGLE_CLIENT_ID");
     const redirectUri = getEnvOrThrow("GOOGLE_REDIRECT_URI");
-    const { returnTo, userId } = c.req.valid("query");
+    const { returnTo, userId, scope } = c.req.valid("query");
     const nonce = crypto.randomUUID();
     const state = encodeState({ nonce, returnTo, userId });
 
@@ -36,9 +36,12 @@ googleRoutes.get("/auth/start", sValidator("query", googleStartQuerySchema), asy
     authUrl.searchParams.set("client_id", clientId);
     authUrl.searchParams.set("redirect_uri", redirectUri);
     authUrl.searchParams.set("response_type", "code");
-    authUrl.searchParams.set("scope", GOOGLE_SCOPES);
+    authUrl.searchParams.set("scope", resolveGoogleScopes(scope));
     authUrl.searchParams.set("access_type", "offline");
     authUrl.searchParams.set("prompt", "consent");
+    // インクリメンタル認可: 以前の認可で得た他スコープの付与状態を保持したまま
+    // 今回のスコープを追加要求する（Google 推奨のインクリメンタル認可パターン）。
+    authUrl.searchParams.set("include_granted_scopes", "true");
     authUrl.searchParams.set("state", state);
 
     const secureAttr = cookieSecurityAttr(c.req.url);
@@ -143,35 +146,56 @@ googleRoutes.get("/calendar/events", async (c) => {
     const session = await refreshGoogleTokenIfNeeded(db, sessionId);
     if (!session) return c.json({ error: "Google session not found" }, 401);
 
-    const calendarListRes = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
+    // maxResults=250 は calendarList.list の上限値。ほぼ全ユーザーを1ページで賄える。
+    const calendarListRes = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250", {
         headers: { Authorization: `Bearer ${session.accessToken}` },
         signal: AbortSignal.timeout(10_000),
     });
     if (!calendarListRes.ok) return c.json({ error: "Failed to fetch calendar list" }, 500);
-    const calendarList = await calendarListRes.json() as { items?: Array<{ id: string }> };
-    const calendarIds = (calendarList.items ?? []).map((cItem) => cItem.id).slice(0, 10);
+    const calendarList = await calendarListRes.json() as {
+        items?: Array<{ id: string; primary?: boolean; selected?: boolean; deleted?: boolean }>;
+    };
+
+    /**
+     * カレンダー数が多いユーザー（バイト先など複数の共有/購読カレンダーを持つ場合）でも
+     * 重要なカレンダーが取得枠から漏れないよう、優先順位をつけてから上限を適用する:
+     *   1. プライマリカレンダー
+     *   2. Google カレンダーの一覧でチェックが入っている（selected）カレンダー
+     *      — 共有されて「追加」した外部カレンダー（バイト先の予定など）は通常ここに入る
+     *   3. それ以外（購読はしているが表示を外しているものなど）
+     * 削除済み（deleted）カレンダーは除外する。
+     * 以前は Google の返却順のまま先頭10件で打ち切っており、優先度に関係なく
+     * 11件目以降のカレンダー（バイト先の共有カレンダー等）が読めなくなる不具合があった。
+     */
+    const MAX_CALENDARS = 25;
+    const rank = (cal: { primary?: boolean; selected?: boolean }) =>
+        cal.primary ? 0 : cal.selected ? 1 : 2;
+    const calendarIds = (calendarList.items ?? [])
+        .filter((cal) => !cal.deleted)
+        .sort((a, b) => rank(a) - rank(b))
+        .map((cal) => cal.id)
+        .slice(0, MAX_CALENDARS);
 
     const timeMin = new Date().toISOString();
     const timeMax = new Date(Date.now() + 1000 * 60 * 60 * 24 * 120).toISOString();
-    const events: Array<Record<string, unknown>> = [];
-    for (const calendarId of calendarIds) {
-        const evRes = await fetch(
-            `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&maxResults=250`,
-            { headers: { Authorization: `Bearer ${session.accessToken}` }, signal: AbortSignal.timeout(10_000) }
-        );
-        if (!evRes.ok) continue;
-        const evJson = await evRes.json() as {
-            items?: Array<{
-                summary?: string;
-                description?: string;
-                htmlLink?: string;
-                start?: { dateTime?: string; date?: string };
-                end?: { dateTime?: string; date?: string };
-                source?: { url?: string };
-            }>;
-        };
-        for (const item of evJson.items ?? []) {
-            events.push({
+    const eventsByCalendar = await Promise.all(
+        calendarIds.map(async (calendarId) => {
+            const evRes = await fetch(
+                `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?singleEvents=true&orderBy=startTime&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&maxResults=250`,
+                { headers: { Authorization: `Bearer ${session.accessToken}` }, signal: AbortSignal.timeout(10_000) }
+            );
+            if (!evRes.ok) return [];
+            const evJson = await evRes.json() as {
+                items?: Array<{
+                    summary?: string;
+                    description?: string;
+                    htmlLink?: string;
+                    start?: { dateTime?: string; date?: string };
+                    end?: { dateTime?: string; date?: string };
+                    source?: { url?: string };
+                }>;
+            };
+            return (evJson.items ?? []).map((item) => ({
                 summary: item.summary ?? "",
                 description: item.description ?? "",
                 htmlLink: item.htmlLink ?? "",
@@ -180,11 +204,11 @@ googleRoutes.get("/calendar/events", async (c) => {
                 dtstart: item.start?.dateTime ?? item.start?.date ?? "",
                 dtend: item.end?.dateTime ?? item.end?.date ?? "",
                 allDay: !!item.start?.date && !item.start?.dateTime,
-            });
-        }
-    }
+            }));
+        })
+    );
 
-    return c.json({ email: session.email, events });
+    return c.json({ email: session.email, events: eventsByCalendar.flat() });
 });
 
 googleRoutes.get("/session-status", async (c) => {

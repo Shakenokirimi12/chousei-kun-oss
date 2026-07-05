@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
+import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
+import { isAllDayEvent } from "@/lib/candidates";
 import { ParticipantComments } from "@/components/ParticipantComments";
 import { ConfirmedScheduleCard } from "@/components/ConfirmedScheduleCard";
 
@@ -120,16 +122,29 @@ export const EventResultsView = memo(function EventResultsView({
                     </div>
                 </div>
             )}
-            <AvailabilityTimeline
-                candidates={candidates}
-                availabilities={candidates.map(() => 2)}
-                onStatusChange={() => { }}
-                okCounts={okCounts}
-                mode="results"
-                confirmedCandidateIdx={confirmedCandidateIdx}
-                candidateStats={candidateStats}
-                candidateParticipants={candidateParticipants}
-            />
+            {isAllDayEvent(candidates) ? (
+                <DailyAvailabilityList
+                    candidates={candidates}
+                    availabilities={candidates.map(() => 2)}
+                    onStatusChange={() => { }}
+                    okCounts={okCounts}
+                    mode="results"
+                    confirmedCandidateIdx={confirmedCandidateIdx}
+                    candidateStats={candidateStats}
+                    candidateParticipants={candidateParticipants}
+                />
+            ) : (
+                <AvailabilityTimeline
+                    candidates={candidates}
+                    availabilities={candidates.map(() => 2)}
+                    onStatusChange={() => { }}
+                    okCounts={okCounts}
+                    mode="results"
+                    confirmedCandidateIdx={confirmedCandidateIdx}
+                    candidateStats={candidateStats}
+                    candidateParticipants={candidateParticipants}
+                />
+            )}
             {participants.length > 0 && <ParticipantComments participants={participants} />}
         </div>
     );

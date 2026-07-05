@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
+import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
+import { isAllDayEvent as areAllDayCandidates, isAllDayCandidate, parseDateOnly } from "@/lib/candidates";
+import { format } from "date-fns";
+import { ja } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { Check, X, Triangle, Circle, Loader2, Calendar as CalendarIcon } from "lucide-react";
 import { siteConfig } from "@/config/site";
@@ -27,6 +31,8 @@ interface ResponseFormProps {
 
 export function ResponseForm({ eventId, candidates, participants, allAvailabilities, onSuccess }: ResponseFormProps) {
   const router = useRouter();
+  // 「日毎の出欠確認」イベント（全候補が終日形式）かどうか
+  const isDailyEvent = React.useMemo(() => areAllDayCandidates(candidates), [candidates]);
   const { userId } = useUser();
   const [name, setName] = React.useState("");
   const [comment, setComment] = React.useState("");
@@ -83,7 +89,10 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     const type = slotId.charAt(0);
     const id = parseInt(slotId.substring(1));
 
-    if (type === "P") {
+    if (type === "D") {
+      // 終日候補: 時間帯を持たない（時間ベースの重複判定はスキップされる）
+      return { date, period: null };
+    } else if (type === "P") {
       period = CUSTOM_PERIODS.find((p: any) => p.id === id);
     } else if (type === "H") {
       period = HOURLY_SLOTS.find((h) => h.id === id);
@@ -95,22 +104,6 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     return { date, period };
   }, []);
 
-  const parseDateOnly = React.useCallback((raw: unknown) => {
-    const text = String(raw ?? "");
-    if (!text) return null;
-
-    // "YYYY-MM-DD" の場合はローカル日付として扱う
-    const dateMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (dateMatch) {
-      const [, y, m, d] = dateMatch;
-      return new Date(Number(y), Number(m) - 1, Number(d), 0, 0, 0, 0);
-    }
-
-    const parsed = new Date(text);
-    if (Number.isNaN(parsed.getTime())) return null;
-    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 0, 0, 0, 0);
-  }, []);
-
   const applyGoogleConflicts = React.useCallback(
     (events: any[], applyAllDay: boolean, detectedEmail?: string) => {
       setAvailabilities((prevAvailabilities) => {
@@ -119,15 +112,21 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
 
         candidates.forEach((candidate, idx) => {
           const { date: cDate, period: cPeriod } = parseCandidateForConflict(candidate);
-          if (!cPeriod) return;
+          // 終日候補は時間帯を持たないため、終日予定との重なりのみ判定する。
+          // 時間指定の予定1件で「その日にいない」ことにはならない。
+          const isDayCandidate = isAllDayCandidate(candidate);
+          if (!cPeriod && !isDayCandidate) return;
 
-          const [startH, startM] = cPeriod.time.split("-")[0].split(":").map(Number);
-          const [endH, endM] = cPeriod.time.split("-")[1].split(":").map(Number);
-
-          const cStart = new Date(cDate);
-          cStart.setHours(startH, startM, 0, 0);
-          const cEnd = new Date(cDate);
-          cEnd.setHours(endH, endM, 0, 0);
+          let cStart: Date | null = null;
+          let cEnd: Date | null = null;
+          if (cPeriod) {
+            const [startH, startM] = cPeriod.time.split("-")[0].split(":").map(Number);
+            const [endH, endM] = cPeriod.time.split("-")[1].split(":").map(Number);
+            cStart = new Date(cDate);
+            cStart.setHours(startH, startM, 0, 0);
+            cEnd = new Date(cDate);
+            cEnd.setHours(endH, endM, 0, 0);
+          }
 
           const candidateDay = new Date(cDate);
           candidateDay.setHours(0, 0, 0, 0);
@@ -149,6 +148,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
               return candidateDay >= startDay && candidateDay < endDay;
             }
 
+            if (!cStart || !cEnd) return false;
             const eStart = new Date(ev.dtstart || ev.start);
             const eEnd = new Date(ev.dtend || ev.end);
             return cStart < eEnd && cEnd > eStart;
@@ -287,7 +287,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     return { date, period };
   }, []);
 
-  const [busyEvents, setBusyEvents] = React.useState<{ start: string; end: string; summary: string }[]>([]);
+  // source: 終日モードで「この日を×にした予定」を由来のカレンダーごとに表示するためのラベル
+  const [busyEvents, setBusyEvents] = React.useState<{ start: string; end: string; summary: string; source: string; allDay: boolean }[]>([]);
 
   const mapEventsToPeriods = React.useCallback((events: any[]) => {
     const newBusyPeriods: string[] = [];
@@ -349,8 +350,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         throw new Error(error.error || "インポートに失敗しました");
       }
 
-      const data = (await res.json()) as { events: { dtstart: string; dtend: string }[] };
-      applyImportedEvents(data.events);
+      const data = (await res.json()) as { events: { dtstart: string; dtend: string; summary?: string; allDay?: boolean }[] };
+      applyImportedEvents(data.events, "大学カレンダー");
     } finally {
       setIsCampusImporting(false);
     }
@@ -370,8 +371,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         throw new Error(error.error || "インポートに失敗しました");
       }
 
-      const data = (await res.json()) as { events: { dtstart: string; dtend: string }[] };
-      applyImportedEvents(data.events);
+      const data = (await res.json()) as { events: { dtstart: string; dtend: string; summary?: string; allDay?: boolean }[] };
+      applyImportedEvents(data.events, "iCal");
     } catch (e: any) {
       setFeedback({
         title: "エラー",
@@ -383,18 +384,20 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     }
   };
 
-  const applyImportedEvents = (events: { dtstart: string; dtend: string; summary?: string }[]) => {
+  const applyImportedEvents = (events: { dtstart: string; dtend: string; summary?: string; allDay?: boolean }[], source: string) => {
     // Populate busy events for display
     const newEvents = events.map(ev => ({
         start: ev.dtstart,
         end: ev.dtend,
-        summary: ev.summary || "予定あり"
+        summary: ev.summary || "予定あり",
+        source,
+        allDay: !!ev.allDay,
     }));
 
     setBusyEvents((prev) => {
       const next = [...prev];
       newEvents.forEach((ne) => {
-        if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+        if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary && p.source === ne.source)) {
           next.push(ne);
         }
       });
@@ -407,24 +410,43 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
 
     candidates.forEach((candidate, idx) => {
       const { date, period } = parseCandidate(candidate);
-      if (!period) return;
+      const isDayCandidate = isAllDayCandidate(candidate);
+      if (!period && !isDayCandidate) return;
 
-      const [startH, startM] = period.time.split("-")[0].split(":").map(Number);
-      const [endH, endM] = period.time.split("-")[1].split(":").map(Number);
       const dateOnly = new Date(date);
       dateOnly.setHours(0, 0, 0, 0);
 
-      const cStart = new Date(dateOnly);
-      cStart.setHours(startH, startM, 0, 0);
-      const cEnd = new Date(dateOnly);
-      cEnd.setHours(endH, endM, 0, 0);
+      let hasConflict: boolean;
+      if (isDayCandidate) {
+        // 終日候補: 取り込んだ「終日予定」と重なる日だけ×にする。
+        // 時間指定の予定は自動×にしない（その日にいるか、の判断は回答者に委ねる）。
+        hasConflict = events.some((ev) => {
+          if (!isAllDayEvent(ev)) return false;
+          const startDay = parseDateOnly(ev.dtstart);
+          let endDay = parseDateOnly(ev.dtend); // exclusive end
+          if (!startDay) return false;
+          if (!endDay || endDay <= startDay) {
+            endDay = new Date(startDay);
+            endDay.setDate(startDay.getDate() + 1);
+          }
+          return dateOnly >= startDay && dateOnly < endDay;
+        });
+      } else {
+        const [startH, startM] = period!.time.split("-")[0].split(":").map(Number);
+        const [endH, endM] = period!.time.split("-")[1].split(":").map(Number);
 
-      // Check against each imported event
-      const hasConflict = events.some((ev) => {
-        const eStart = new Date(ev.dtstart);
-        const eEnd = new Date(ev.dtend);
-        return cStart < eEnd && cEnd > eStart;
-      });
+        const cStart = new Date(dateOnly);
+        cStart.setHours(startH, startM, 0, 0);
+        const cEnd = new Date(dateOnly);
+        cEnd.setHours(endH, endM, 0, 0);
+
+        // Check against each imported event
+        hasConflict = events.some((ev) => {
+          const eStart = new Date(ev.dtstart);
+          const eEnd = new Date(ev.dtend);
+          return cStart < eEnd && cEnd > eStart;
+        });
+      }
 
       if (hasConflict) {
         newAvailabilities[idx] = 0; // Mark as X
@@ -457,7 +479,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         const url = new URL(window.location.href);
         url.searchParams.set("googleOAuth", "1");
         const returnTo = encodeURIComponent(url.pathname + url.search);
-        window.location.href = `/api/google/auth/start?returnTo=${returnTo}`;
+        // 自分の予定プレビューのみ使うため read スコープに留める
+        window.location.href = `/api/google/auth/start?returnTo=${returnTo}&scope=read`;
         return;
       }
       if (!res.ok) {
@@ -480,13 +503,15 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
       const newEvents = events.map(ev => ({
           start: ev.dtstart,
           end: ev.dtend,
-          summary: ev.summary || "予定あり"
+          summary: ev.summary || "予定あり",
+          source: "Googleカレンダー",
+          allDay: !!ev.allDay,
       }));
 
       setBusyEvents((prev) => {
         const next = [...prev];
         newEvents.forEach((ne) => {
-          if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
+          if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary && p.source === ne.source)) {
             next.push(ne);
           }
         });
@@ -645,7 +670,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
           </div>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="text-sm font-medium leading-none">出欠を選択 <span className="text-muted-foreground font-normal">(カレンダー内をタップして切り替え)</span></label>
+              <label className="text-sm font-medium leading-none">出欠を選択 <span className="text-muted-foreground font-normal">{isDailyEvent ? "(日ごとに ○/△/× を選択)" : "(カレンダー内をタップして切り替え)"}</span></label>
               <CalendarImportMenu
                 triggerLabel="自分の予定から取り込む"
                 title="自分の予定から出欠を自動入力"
@@ -665,23 +690,33 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
                 <X className="w-3 h-3 mr-1" /> 全て×にする
               </Button>
             </div>
-            <AvailabilityTimeline
-              candidates={candidates}
-              availabilities={availabilities}
-              onStatusChange={handleStatusChange}
-              onDayStatusChange={handleDayStatusChange}
-              busyEvents={busyEvents}
-              okCounts={okCounts}
-            />
+            {isDailyEvent ? (
+              <DailyAvailabilityList
+                candidates={candidates}
+                availabilities={availabilities}
+                onStatusChange={handleStatusChange}
+                busyEvents={busyEvents}
+                okCounts={okCounts}
+              />
+            ) : (
+              <AvailabilityTimeline
+                candidates={candidates}
+                availabilities={availabilities}
+                onStatusChange={handleStatusChange}
+                onDayStatusChange={handleDayStatusChange}
+                busyEvents={busyEvents}
+                okCounts={okCounts}
+              />
+            )}
             <div className="flex flex-wrap gap-4 text-xs text-muted-foreground justify-center py-2">
               <div className="flex items-center gap-1.5">
-                <Circle className="w-3 h-3 text-green-500" /> 参加可能
+                <Circle className="w-3 h-3 text-green-500" /> {isDailyEvent ? "いる" : "参加可能"}
               </div>
               <div className="flex items-center gap-1.5">
-                <Triangle className="w-3 h-3 text-yellow-500" /> 調整中
+                <Triangle className="w-3 h-3 text-yellow-500" /> {isDailyEvent ? "未定" : "調整中"}
               </div>
               <div className="flex items-center gap-1.5">
-                <X className="w-3 h-3 text-red-500" /> 不参加
+                <X className="w-3 h-3 text-red-500" /> {isDailyEvent ? "いない" : "不参加"}
               </div>
             </div>
           </div>
@@ -713,7 +748,12 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
           <DialogHeader>
             <DialogTitle>終日予定が見つかりました</DialogTitle>
             <DialogDescription>
-              終日予定がある日: {pendingAllDayDates.join(", ")}
+              終日予定がある日: {pendingAllDayDates
+                .map((raw) => {
+                  const d = parseDateOnly(raw);
+                  return d ? format(d, "M/d(E)", { locale: ja }) : raw;
+                })
+                .join("、")}
               <br />
               これらの日は候補をすべて「×」にしますか？
             </DialogDescription>

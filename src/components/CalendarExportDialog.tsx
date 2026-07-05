@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Calendar, Download, Loader2, X } from "lucide-react";
 import { generateICalEvent, parseCandidateToDateTime, downloadICalFile } from "@/lib/ical";
+import { formatAllDayCandidateLabelLong } from "@/lib/candidates";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 
@@ -38,7 +39,9 @@ export function CalendarExportDialog({
 
     const dateTime = parseCandidateToDateTime(confirmedCandidate);
     const formattedDateTime = dateTime
-        ? `${format(dateTime.start, "M月d日(E) HH:mm", { locale: ja })} 〜 ${format(dateTime.end, "HH:mm", { locale: ja })}`
+        ? dateTime.allDay
+            ? formatAllDayCandidateLabelLong(confirmedCandidate)
+            : `${format(dateTime.start, "M月d日(E) HH:mm", { locale: ja })} 〜 ${format(dateTime.end, "HH:mm", { locale: ja })}`
         : "";
 
     const handleDownloadIcal = () => {
@@ -47,8 +50,9 @@ export function CalendarExportDialog({
         const icalContent = generateICalEvent({
             title: `${eventTitle}（確定）`,
             description: eventDescription || "調整くんで確定した日程です。",
-            startDateTime: dateTime.start,
-            endDateTime: dateTime.end,
+            ...(dateTime.allDay
+                ? { allDay: true as const, date: dateTime.date }
+                : { startDateTime: dateTime.start, endDateTime: dateTime.end }),
         });
 
         const safeTitle = eventTitle.replace(/[^a-zA-Z0-9\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/g, "_");
@@ -159,7 +163,8 @@ export function CalendarExportDialog({
                             className="underline underline-offset-2 ml-1"
                             onClick={() => {
                                 const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
-                                window.location.href = `/api/google/auth/start?returnTo=${returnTo}`;
+                                // カレンダーへの予定作成・招待送信に使うため write スコープが必要
+                                window.location.href = `/api/google/auth/start?returnTo=${returnTo}&scope=write`;
                             }}
                         >
                             Googleアカウントでログイン

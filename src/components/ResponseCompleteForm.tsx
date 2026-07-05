@@ -24,9 +24,13 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
     const [googleEmail, setGoogleEmail] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
     const [copiedEvent, setCopiedEvent] = useState(false);
     const [copiedAll, setCopiedAll] = useState(false);
     const [isRegenerating, setIsRegenerating] = useState(false);
+
+    const trimmedNotificationEmail = notificationEmail.trim();
+    const isEmailInvalid = trimmedNotificationEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedNotificationEmail);
 
     const isLocalhost = typeof window !== "undefined" && window.location.hostname === "localhost";
     
@@ -55,9 +59,10 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                 const data = await res.json() as {
                     hasSession: boolean;
                     email: string | null;
-                    hasCalendarWriteScope: boolean;
                 };
-                setHasGoogleSession(data.hasSession && data.hasCalendarWriteScope);
+                // このフローは通知先メールの本人確認のみに Google ログインを使い、
+                // カレンダーへの読み書きは行わないため、カレンダースコープの有無は問わない。
+                setHasGoogleSession(data.hasSession);
                 if (data.email) {
                     setGoogleEmail(data.email);
                     if (!notificationEmail) {
@@ -77,7 +82,8 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
         logActivity("通知設定保存開始", `preference: ${calendarPreference}`);
         setIsSaving(true);
         setSaved(false);
-        
+        setSaveError(null);
+
         try {
             const res = await fetch(`/api/events/${eventId}/notification`, {
                 method: "POST",
@@ -100,6 +106,7 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
             console.error(error);
+            setSaveError(error instanceof Error ? error.message : "保存に失敗しました。もう一度お試しください。");
         } finally {
             setIsSaving(false);
         }
@@ -108,7 +115,8 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
     const handleGoogleConnect = () => {
         logActivity("Googleログイン開始");
         const returnTo = encodeURIComponent(window.location.pathname);
-        window.location.href = `/api/google/auth/start?returnTo=${returnTo}`;
+        // 通知先メール確認のためだけの本人確認。カレンダーへの読み書きは行わない
+        window.location.href = `/api/google/auth/start?returnTo=${returnTo}&scope=basic`;
     };
 
     const handleRegenerateToken = async () => {
@@ -284,7 +292,12 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                                     value={notificationEmail}
                                     onChange={(e) => setNotificationEmail(e.target.value)}
                                     placeholder="example@gmail.com"
+                                    aria-invalid={isEmailInvalid}
+                                    className={isEmailInvalid ? "border-destructive focus-visible:ring-destructive" : undefined}
                                 />
+                                {isEmailInvalid && (
+                                    <p className="text-xs text-destructive">メールアドレスの形式が正しくありません。</p>
+                                )}
                             </div>
                         </div>
                     )}
@@ -404,25 +417,30 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                 </div>
 
                 {participantId && calendarPreference === "google" && hasGoogleSession && (
-                    <Button
-                        onClick={handleSave}
-                        disabled={isSaving || !notificationEmail.trim()}
-                        className="w-full"
-                    >
-                        {isSaving ? (
-                            <>
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                保存中...
-                            </>
-                        ) : saved ? (
-                            <>
-                                <Check className="mr-2 h-4 w-4" />
-                                保存しました
-                            </>
-                        ) : (
-                            "設定を保存"
+                    <div className="space-y-2">
+                        <Button
+                            onClick={handleSave}
+                            disabled={isSaving || !notificationEmail.trim() || isEmailInvalid}
+                            className="w-full"
+                        >
+                            {isSaving ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    保存中...
+                                </>
+                            ) : saved ? (
+                                <>
+                                    <Check className="mr-2 h-4 w-4" />
+                                    保存しました
+                                </>
+                            ) : (
+                                "設定を保存"
+                            )}
+                        </Button>
+                        {saveError && (
+                            <p className="text-sm text-destructive">{saveError}</p>
                         )}
-                    </Button>
+                    </div>
                 )}
             </CardContent>
         </Card>

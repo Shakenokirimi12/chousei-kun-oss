@@ -5,7 +5,12 @@ import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
 // Enable calling `getCloudflareContext()` in `next dev`.
 // See https://opennext.js.org/cloudflare/bindings#local-access-to-bindings.
-initOpenNextCloudflareForDev();
+// dev 専用。本番ビルド(`next build`)では呼ばない: Flagship 等のリモート
+// バインディングに対してリモートプレビューセッションを張ろうとしてビルドが
+// 失敗するため（getCloudflareContext は実行時にのみ使う）。
+if (process.env.NODE_ENV !== "production") {
+	initOpenNextCloudflareForDev();
+}
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 

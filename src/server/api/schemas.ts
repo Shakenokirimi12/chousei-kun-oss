@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 /**
- * 候補スロット文字列: `YYYY-MM-DD_P<n>` または `YYYY-MM-DD_H<n>`。
- * 形式に加えて日付が実在することを検証する。
+ * 候補スロット文字列: `YYYY-MM-DD_P<n>`(時限) / `YYYY-MM-DD_H<n>`(時間) /
+ * `YYYY-MM-DD_D`(終日)。形式に加えて日付が実在することを検証する。
  */
 const candidateSchema = z
     .string()
     .max(32)
-    .regex(/^\d{4}-\d{2}-\d{2}_(P|H)\d+$/)
+    .regex(/^\d{4}-\d{2}-\d{2}_((P|H)\d+|D)$/)
     .refine((value) => {
         const [datePart] = value.split("_");
         const [y, m, d] = datePart.split("-").map(Number);
@@ -20,7 +20,15 @@ const candidateSchema = z
         );
     }, "Invalid candidate date");
 
-const candidatesSchema = z.array(candidateSchema).min(1).max(500);
+const candidatesSchema = z
+    .array(candidateSchema)
+    .min(1)
+    .max(500)
+    // 終日候補と時限/時間候補の混在は不可（回答UI・重複判定の意味が曖昧になるため）
+    .refine((arr) => {
+        const allDayCount = arr.filter((c) => c.endsWith("_D")).length;
+        return allDayCount === 0 || allDayCount === arr.length;
+    }, "All-day and timed candidates cannot be mixed");
 
 export const createEventSchema = z.object({
     title: z.string().trim().min(1).max(200),
@@ -87,6 +95,8 @@ export const updateNotificationSchema = z.object({
 export const googleStartQuerySchema = z.object({
     returnTo: z.string().max(512).optional().default("/"),
     userId: z.string().uuid().optional(),
+    /** インクリメンタル認可のスコープ段階。省略時は最小の "basic"。 */
+    scope: z.enum(["basic", "read", "write"]).optional().default("basic"),
 });
 
 // --- Office Hour ---
@@ -143,89 +153,4 @@ export const bookOfficeHourSchema = z.object({
     comment: z.string().max(1000).optional().default(""),
     email: z.string().email().max(254).optional().or(z.literal("")).default(""),
     userId: z.string().uuid().optional(),
-});
-
-// --- シフト調整 ---
-
-/** 作成・編集時のシフト枠。id 付きは既存枠の更新、無しは新規作成として扱う。 */
-const shiftSlotInputSchema = z.object({
-    id: z.string().uuid().optional(),
-    startsAt: z.number().int(),         // ms epoch
-    endsAt: z.number().int(),           // ms epoch
-    role: z.string().trim().min(1).max(100),
-    place: z.string().trim().max(100).optional().default(""),
-    capacity: z.number().int().min(1).max(1000),
-    sortOrder: z.number().int().min(0).max(10000).optional().default(0),
-}).refine((s) => s.endsAt > s.startsAt, "endsAt must be after startsAt");
-
-// 日々の収集時間帯（0:00 からの分）。終了 > 開始。
-const dayBandRefine = (v: { dayStartMin: number; dayEndMin: number }) =>
-    v.dayEndMin > v.dayStartMin;
-const dateRangeRefine = (v: { startDate: number; endDate: number }) =>
-    v.endDate >= v.startDate;
-
-export const createShiftBoardSchema = z
-    .object({
-        title: z.string().trim().min(1).max(200),
-        description: z.string().max(2000).optional().default(""),
-        startDate: z.number().int(), // 開始日 JST 0:00 ms
-        endDate: z.number().int(), // 終了日 JST 0:00 ms（両端含む）
-        dayStartMin: z.number().int().min(0).max(24 * 60),
-        dayEndMin: z.number().int().min(0).max(24 * 60),
-        submissionDeadline: z.number().int().nullable().optional(),
-        // 枠は作成時に無くてもよい（集計段階で追加できる）。
-        slots: z.array(shiftSlotInputSchema).max(500).optional().default([]),
-        adminPassword: z.string().min(8).max(256),
-        creatorUserId: z.string().uuid().optional(),
-    })
-    .refine(dateRangeRefine, "endDate must be >= startDate")
-    .refine(dayBandRefine, "dayEndMin must be > dayStartMin");
-
-export const updateShiftBoardSchema = z
-    .object({
-        title: z.string().trim().min(1).max(200).optional(),
-        description: z.string().max(2000).optional(),
-        startDate: z.number().int().optional(),
-        endDate: z.number().int().optional(),
-        dayStartMin: z.number().int().min(0).max(24 * 60).optional(),
-        dayEndMin: z.number().int().min(0).max(24 * 60).optional(),
-        submissionDeadline: z.number().int().nullable().optional(),
-        slots: z.array(shiftSlotInputSchema).max(500).optional(),
-    });
-
-export const shiftBoardIdParamSchema = z.object({
-    id: z.string().uuid(),
-});
-
-export const ownShiftMemberParamSchema = z.object({
-    id: z.string().uuid(),
-    memberId: z.string().uuid(),
-});
-
-/** メンバーの NG 申告（出られない時間帯のレンジ配列）。userId で本人を識別し再提出を許す。 */
-export const submitShiftMemberSchema = z.object({
-    name: z.string().trim().min(1).max(100),
-    department: z.string().trim().max(100).optional().default(""),
-    comment: z.string().max(1000).optional().default(""),
-    memberId: z.string().uuid().optional(),
-    userId: z.string().uuid().optional(),
-    unavailableRanges: z
-        .array(
-            z
-                .object({ startsAt: z.number().int(), endsAt: z.number().int() })
-                .refine((r) => r.endsAt > r.startsAt, "endsAt must be after startsAt")
-        )
-        .max(50)
-        .default([]),
-});
-
-/** 管理者による割当の一括置換。(slotId, memberId) のペア配列。 */
-export const setShiftAssignmentsSchema = z.object({
-    assignments: z
-        .array(z.object({ slotId: z.string().uuid(), memberId: z.string().uuid() }))
-        .max(5000),
-});
-
-export const publishShiftBoardSchema = z.object({
-    published: z.boolean(),
 });

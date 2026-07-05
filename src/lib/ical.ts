@@ -1,12 +1,14 @@
 import { CUSTOM_PERIODS } from "@/config/periods";
+import { nextDateString } from "@/lib/candidates";
 
 type ICalEventOptions = {
     title: string;
     description?: string;
-    startDateTime: Date;
-    endDateTime: Date;
     location?: string;
-};
+} & (
+    | { allDay?: false; startDateTime: Date; endDateTime: Date }
+    | { allDay: true; /** YYYY-MM-DD */ date: string }
+);
 
 function formatICalDate(date: Date): string {
     const pad = (n: number) => n.toString().padStart(2, "0");
@@ -35,8 +37,18 @@ function escapeICalText(text: string): string {
 }
 
 export function generateICalEvent(options: ICalEventOptions): string {
-    const { title, description, startDateTime, endDateTime, location } = options;
+    const { title, description, location } = options;
     const now = new Date();
+
+    const dtLines = options.allDay
+        ? [
+              `DTSTART;VALUE=DATE:${options.date.replaceAll("-", "")}`,
+              `DTEND;VALUE=DATE:${nextDateString(options.date).replaceAll("-", "")}`,
+          ]
+        : [
+              `DTSTART:${formatICalDate(options.startDateTime)}`,
+              `DTEND:${formatICalDate(options.endDateTime)}`,
+          ];
 
     const lines = [
         "BEGIN:VCALENDAR",
@@ -47,8 +59,7 @@ export function generateICalEvent(options: ICalEventOptions): string {
         "BEGIN:VEVENT",
         `UID:${generateUID()}`,
         `DTSTAMP:${formatICalDate(now)}`,
-        `DTSTART:${formatICalDate(startDateTime)}`,
-        `DTEND:${formatICalDate(endDateTime)}`,
+        ...dtLines,
         `SUMMARY:${escapeICalText(title)}`,
     ];
 
@@ -65,11 +76,19 @@ export function generateICalEvent(options: ICalEventOptions): string {
     return lines.join("\r\n");
 }
 
-export function parseCandidateToDateTime(candidate: string): { start: Date; end: Date } | null {
+export type CandidateDateTime =
+    | { allDay: true; /** YYYY-MM-DD */ date: string }
+    | { allDay?: false; start: Date; end: Date };
+
+export function parseCandidateToDateTime(candidate: string): CandidateDateTime | null {
     const [datePart, slotRaw] = candidate.split("_");
     if (!datePart || !slotRaw) return null;
 
     const slotType = slotRaw.charAt(0);
+    if (slotType === "D") {
+        return { allDay: true, date: datePart };
+    }
+
     const slotId = Number.parseInt(slotRaw.slice(1), 10);
     if (Number.isNaN(slotId)) return null;
 
@@ -105,14 +124,25 @@ export function parseCandidateToDateTime(candidate: string): { start: Date; end:
     return { start, end };
 }
 
-export function parseICal(icalData: string): { dtstart: string; dtend: string; summary: string }[] {
-    const events: { dtstart: string; dtend: string; summary: string }[] = [];
-    
+/** DTSTART/DTEND 行が終日（時刻を持たない `;VALUE=DATE` 形式）かどうかを判定する。 */
+function isAllDayDateLine(line: string): boolean {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx < 0) return false;
+    const propPart = line.slice(0, colonIdx);
+    const value = line.slice(colonIdx + 1).trim();
+    if (/;VALUE=DATE\b/i.test(propPart)) return true;
+    // TZID/Z 等の時刻情報を伴わない YYYYMMDD のみの値
+    return /^\d{8}$/.test(value);
+}
+
+export function parseICal(icalData: string): { dtstart: string; dtend: string; summary: string; allDay: boolean }[] {
+    const events: { dtstart: string; dtend: string; summary: string; allDay: boolean }[] = [];
+
     // Unfold lines: iCal lines starting with a space or tab are continuations
     const unfoldedData = icalData.replace(/\r?\n[ \t]/g, "");
     const lines = unfoldedData.split(/\r?\n/);
-    
-    let currentEvent: { dtstart?: string; dtend?: string; summary?: string } | null = null;
+
+    let currentEvent: { dtstart?: string; dtend?: string; summary?: string; allDay?: boolean } | null = null;
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -124,12 +154,14 @@ export function parseICal(icalData: string): { dtstart: string; dtend: string; s
                     dtstart: currentEvent.dtstart,
                     dtend: currentEvent.dtend,
                     summary: currentEvent.summary || "(No Title)",
+                    allDay: !!currentEvent.allDay,
                 });
             }
             currentEvent = null;
         } else if (currentEvent) {
             if (line.startsWith("DTSTART")) {
                 currentEvent.dtstart = parseICalDateTime(line);
+                currentEvent.allDay = isAllDayDateLine(line);
             } else if (line.startsWith("DTEND")) {
                 currentEvent.dtend = parseICalDateTime(line);
             } else if (line.startsWith("SUMMARY")) {

@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { eq } from "drizzle-orm";
 import { createDb } from "@/server/db/client";
-import { events, officeHours, shiftBoards } from "@/server/db/schema";
+import { events, officeHours } from "@/server/db/schema";
 import { COOKIE_NAMES, API_ERRORS } from "@/lib/constants";
 import { timingSafeEqual } from "@/lib/admin-auth";
 
@@ -63,38 +63,6 @@ export async function verifyOfficeHourAdminSession(
     });
     if (!row) {
         return { authorized: false, error: "Office Hour not found" };
-    }
-    if (!timingSafeEqual(sessionToken, row.adminAccessToken)) {
-        return { authorized: false, error: API_ERRORS.UNAUTHORIZED };
-    }
-
-    return { authorized: true, deleted: row.deletedAt !== null };
-}
-
-/**
- * シフト表用の管理者セッション検証。Office Hour と同方針で cookie のトークンを
- * timing-safe に DB の adminAccessToken と比較する。
- */
-export async function verifyShiftAdminSession(
-    c: Context<{ Bindings: Bindings }>,
-    boardId: string
-): Promise<{ authorized: boolean; error?: string; deleted?: boolean }> {
-    const cookie = c.req.header("cookie") ?? "";
-    const tokenMatch = cookie.match(
-        new RegExp(`(?:^|;\\s*)${COOKIE_NAMES.ADMIN_PREFIX}${boardId}=([^;]+)`)
-    );
-    const sessionToken = tokenMatch?.[1];
-    if (!sessionToken) {
-        return { authorized: false, error: API_ERRORS.UNAUTHORIZED };
-    }
-
-    const db = createDb(c.env.DB);
-    const row = await db.query.shiftBoards.findFirst({
-        where: eq(shiftBoards.id, boardId),
-        columns: { adminAccessToken: true, deletedAt: true },
-    });
-    if (!row) {
-        return { authorized: false, error: "Shift board not found" };
     }
     if (!timingSafeEqual(sessionToken, row.adminAccessToken)) {
         return { authorized: false, error: API_ERRORS.UNAUTHORIZED };

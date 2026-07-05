@@ -3,18 +3,35 @@ import type { DbClient } from "@/server/db/client";
 import { googleOauthSessions } from "@/server/db/schema";
 import { CUSTOM_PERIODS } from "@/config/periods";
 import type { CandidateWindow } from "@/types";
+import { nextDateString } from "@/lib/candidates";
 import { encryptToken, decryptToken } from "@/lib/token-crypto";
-
-export const GOOGLE_SCOPES = [
-    "openid",
-    "email",
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/calendar.events",
-].join(" ");
 
 export const GOOGLE_CALENDAR_READ_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 export const GOOGLE_CALENDAR_WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events";
-export const AVAILABILITY_INSERT_BATCH_SIZE = 20;
+
+/**
+ * OAuth の最小権限の原則(インクリメンタル認可)に沿って、用途別にスコープ段階を分ける。
+ * 以前は全フローで read+write を一律要求しており、Google の審査で
+ * 「最小スコープのリクエスト」指摘（用途に対してスコープが広すぎる）を受けた。
+ *
+ * - basic: 本人確認・通知先メール取得のみ（カレンダーへの読み書きは一切しない）
+ *   例: 参加者が「Googleカレンダーに自動追加」を選ぶ際のメールアドレス確認
+ * - read : 自分の予定を読み取り、候補日程との重複プレビューに使う
+ *   例: イベント作成時/回答時の「自分の予定から取り込む」
+ * - write: Google カレンダーへの予定作成・招待送信に使う（read を含む）
+ *   例: 管理者が確定日程を Google カレンダーに追加して参加者に招待を送る
+ */
+export const GOOGLE_SCOPE_TIERS = {
+    basic: ["openid", "email"],
+    read: ["openid", "email", GOOGLE_CALENDAR_READ_SCOPE],
+    write: ["openid", "email", GOOGLE_CALENDAR_READ_SCOPE, GOOGLE_CALENDAR_WRITE_SCOPE],
+} as const;
+
+export type GoogleScopeTier = keyof typeof GOOGLE_SCOPE_TIERS;
+
+export function resolveGoogleScopes(tier: GoogleScopeTier): string {
+    return GOOGLE_SCOPE_TIERS[tier].join(" ");
+}
 
 export function getEnvOrThrow(name: string): string {
     const value = process.env[name];
@@ -52,6 +69,15 @@ export function parseCandidateWindow(candidate: string): CandidateWindow | null 
     if (!datePart || !slotRaw) return null;
 
     const slotType = slotRaw.charAt(0);
+
+    if (slotType === "D") {
+        return {
+            allDay: true,
+            startDate: datePart,
+            endDateExclusive: nextDateString(datePart),
+        };
+    }
+
     const slotId = Number.parseInt(slotRaw.slice(1), 10);
     if (Number.isNaN(slotId)) return null;
 
@@ -156,15 +182,4 @@ export async function getGoogleSessionAndScopes(db: DbClient, sessionId: string)
     const tokenInfo = await tokenInfoRes.json() as { scope?: string };
     const scopes = tokenInfo.scope?.split(" ").filter(Boolean) ?? [];
     return { session, scopes };
-}
-
-export async function insertAvailabilitiesInBatches(
-    db: DbClient,
-    rows: Array<{ id: string; participantId: string; candidateIdx: number; status: number }>
-) {
-    const { availabilities } = await import("@/server/db/schema");
-    for (let i = 0; i < rows.length; i += AVAILABILITY_INSERT_BATCH_SIZE) {
-        const chunk = rows.slice(i, i + AVAILABILITY_INSERT_BATCH_SIZE);
-        await db.insert(availabilities).values(chunk);
-    }
 }

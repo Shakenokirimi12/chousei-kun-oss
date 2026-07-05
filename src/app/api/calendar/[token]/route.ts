@@ -2,6 +2,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { createDb } from "@/server/db/client";
 import { createUserService } from "@/server/services";
 import { CUSTOM_PERIODS } from "@/config/periods";
+import { nextDateString } from "@/lib/candidates";
 
 function formatICalDate(date: Date): string {
     const pad = (n: number) => n.toString().padStart(2, "0");
@@ -25,11 +26,19 @@ function escapeICalText(text: string): string {
         .replace(/\n/g, "\\n");
 }
 
-function parseCandidateToDateTime(candidate: string): { start: Date; end: Date } | null {
+type CandidateDateTime =
+    | { allDay: true; date: string }
+    | { allDay?: false; start: Date; end: Date };
+
+function parseCandidateToDateTime(candidate: string): CandidateDateTime | null {
     const [datePart, slotRaw] = candidate.split("_");
     if (!datePart || !slotRaw) return null;
 
     const slotType = slotRaw.charAt(0);
+    if (slotType === "D") {
+        return { allDay: true, date: datePart };
+    }
+
     const slotId = Number.parseInt(slotRaw.slice(1), 10);
     if (Number.isNaN(slotId)) return null;
 
@@ -119,12 +128,20 @@ export async function GET(
             const dateTime = parseCandidateToDateTime(confirmedCandidate);
             if (!dateTime) continue;
 
+            const dtLines = dateTime.allDay
+                ? [
+                      `DTSTART;VALUE=DATE:${dateTime.date.replaceAll("-", "")}`,
+                      `DTEND;VALUE=DATE:${nextDateString(dateTime.date).replaceAll("-", "")}`,
+                  ]
+                : [
+                      `DTSTART:${formatICalDate(dateTime.start)}`,
+                      `DTEND:${formatICalDate(dateTime.end)}`,
+                  ];
             lines.push(
                 "BEGIN:VEVENT",
                 `UID:${event.id}@chousei-kun`,
                 `DTSTAMP:${formatICalDate(now)}`,
-                `DTSTART:${formatICalDate(dateTime.start)}`,
-                `DTEND:${formatICalDate(dateTime.end)}`,
+                ...dtLines,
                 `SUMMARY:${escapeICalText(event.title)}`,
                 `DESCRIPTION:${escapeICalText(event.description || "調整くんで確定した日程です。")}`,
                 "STATUS:CONFIRMED",

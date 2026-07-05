@@ -41,6 +41,11 @@ export default function WanaTestPage() {
         void Promise.reject(new Error("Wana frontend self-test (unhandled rejection, intentional)"));
     };
 
+    const testConsoleError = () => {
+        append("④ console.error を発火（WanaInit のフックが捕捉して送信）");
+        console.error(new Error(`Wana frontend self-test (console.error, intentional) ${Date.now()}`));
+    };
+
     const testBackend = async () => {
         append("③ バックエンド経由 … /api/wana/selftest を呼び出し");
         try {
@@ -81,6 +86,9 @@ export default function WanaTestPage() {
                 </button>
                 <button style={btn} onClick={testBackend}>
                     ③ バックエンド経由
+                </button>
+                <button style={btn} onClick={testConsoleError}>
+                    ④ console.error を発火
                 </button>
             </div>
 

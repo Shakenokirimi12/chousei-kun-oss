@@ -44,6 +44,14 @@ function getDsn(): string | undefined {
     return dsn && dsn.trim() ? dsn.trim() : undefined;
 }
 
+/**
+ * ブラウザからの送信に使う同一オリジンのトンネルパス。
+ * ingest ドメインへの直接 POST は URL に `/envelope/?sentry_key=` を含み、
+ * EasyPrivacy 系の広告ブロッカーに Sentry として遮断されることが多い。
+ * 同一オリジンの API パスなら遮断されず、CORS / CSP の影響も受けない。
+ */
+export const WANA_TUNNEL_PATH = "/api/wana/envelope";
+
 function parseDsn(dsn: string): Dsn | null {
     try {
         const u = new URL(dsn);
@@ -147,9 +155,45 @@ function buildEnvelope(dsn: Dsn, event: Record<string, unknown>, eventId: string
     return `${header}\n${itemHeader}\n${payload}\n`;
 }
 
+/** DSN から ingest の envelope エンドポイント URL を組み立てる（サーバ側トンネルでも使用）。 */
+export function getWanaIngestUrl(): string | null {
+    const dsnStr = getDsn();
+    if (!dsnStr) return null;
+    const dsn = parseDsn(dsnStr);
+    if (!dsn) return null;
+    return (
+        `${dsn.protocol}://${dsn.host}/api/${encodeURIComponent(dsn.projectId)}` +
+        `/envelope/?sentry_key=${encodeURIComponent(dsn.publicKey)}`
+    );
+}
+
+/** 正規化した DSN 文字列（envelope ヘッダに書く形式）。トンネル側の検証にも使う。 */
+export function getNormalizedDsn(): string | null {
+    const dsnStr = getDsn();
+    if (!dsnStr) return null;
+    const dsn = parseDsn(dsnStr);
+    if (!dsn) return null;
+    return `${dsn.protocol}://${dsn.publicKey}@${dsn.host}/${dsn.projectId}`;
+}
+
+async function postEnvelope(url: string, body: string): Promise<{ ok: boolean; status: number }> {
+    const res = await fetch(url, {
+        method: "POST",
+        // text/plain に収めて CORS preflight を避ける（ブラウザ）。
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body,
+        // ページ離脱中でも送り切れるように（ブラウザのみ）。
+        ...(isBrowser() ? { keepalive: true } : {}),
+    });
+    return { ok: res.ok, status: res.status };
+}
+
 /**
  * 例外を Wana に送信する。アプリ側に例外を伝播させず、結果を戻り値で返す。
  * DSN 未設定時は no-op（`ok:false` + error 文言）。
+ *
+ * ブラウザでは同一オリジンのトンネル（WANA_TUNNEL_PATH）を優先し、
+ * 失敗時（メンテナンスモード等）のみ ingest へ直送する。サーバは常に直送。
  */
 export async function captureException(error: unknown, ctx: WanaContext = {}): Promise<WanaResult> {
     const dsnStr = getDsn();
@@ -161,19 +205,18 @@ export async function captureException(error: unknown, ctx: WanaContext = {}): P
     try {
         const event = buildEvent(error, ctx, eventId);
         const body = buildEnvelope(dsn, event, eventId);
-        const url =
-            `${dsn.protocol}://${dsn.host}/api/${encodeURIComponent(dsn.projectId)}` +
-            `/envelope/?sentry_key=${encodeURIComponent(dsn.publicKey)}`;
+        const directUrl = getWanaIngestUrl() as string;
 
-        const res = await fetch(url, {
-            method: "POST",
-            // text/plain に収めて CORS preflight を避ける（ブラウザ）。
-            headers: { "Content-Type": "text/plain;charset=UTF-8" },
-            body,
-            // ページ離脱中でも送り切れるように（ブラウザのみ）。
-            ...(isBrowser() ? { keepalive: true } : {}),
-        });
+        if (isBrowser()) {
+            try {
+                const viaTunnel = await postEnvelope(WANA_TUNNEL_PATH, body);
+                if (viaTunnel.ok) return { ok: true, eventId, status: viaTunnel.status };
+            } catch {
+                // トンネル不達（オフライン・メンテ等）は直送にフォールバック
+            }
+        }
 
+        const res = await postEnvelope(directUrl, body);
         if (!res.ok) {
             return { ok: false, eventId, status: res.status, error: `ingest responded ${res.status}` };
         }

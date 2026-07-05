@@ -5,11 +5,16 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
+import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
 import { PeriodSelector, CUSTOM_PERIODS } from "@/components/PeriodSelector";
+import { AllDayRangeSelector } from "@/components/AllDayRangeSelector";
+import { isAllDayEvent } from "@/lib/candidates";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ParticipantComments } from "@/components/ParticipantComments";
 import { CalendarExportDialog } from "@/components/CalendarExportDialog";
-import { Check, CircleCheck, CircleAlert, CircleX } from "lucide-react";
+import { ConfirmedScheduleCard } from "@/components/ConfirmedScheduleCard";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Check, CircleCheck, CircleAlert, CircleX, Loader2, CalendarPlus } from "lucide-react";
 import { logActivity } from "@/hooks/useActivityLog";
 
 type Props = {
@@ -46,7 +51,12 @@ export function AdminEventSettings({
     const [hasGoogleSession, setHasGoogleSession] = useState(false);
     const [showCalendarExportDialog, setShowCalendarExportDialog] = useState(false);
     const [pendingConfirmedIdx, setPendingConfirmedIdx] = useState<number | null>(null);
+    const [pendingCandidateConfirmIdx, setPendingCandidateConfirmIdx] = useState<number | null>(null);
+    const [showDuplicateConfirm, setShowDuplicateConfirm] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const completeTimerRef = useRef<NodeJS.Timeout | null>(null);
+    // 「日毎の出欠確認」イベントか。編集UIも終日用セレクタに切り替える（種別の変更は不可）
+    const isDailyEvent = useMemo(() => isAllDayEvent(initialCandidates), [initialCandidates]);
 
     useEffect(() => {
         let cancelled = false;
@@ -206,7 +216,6 @@ export function AdminEventSettings({
     const [deleteConfirmText, setDeleteConfirmText] = useState("");
     const [isDuplicating, setIsDuplicating] = useState(false);
     const handleDuplicateEvent = async () => {
-        if (!confirm("このイベントの設定を複製した新しいイベントを作成します。回答はコピーされません。続行しますか？")) return;
         setError("");
         setIsDuplicating(true);
         try {
@@ -229,9 +238,6 @@ export function AdminEventSettings({
             setError("確認のためイベントタイトルをそのまま入力してください。");
             return;
         }
-        if (!confirm("本当にこのイベントを完全削除しますか？参加者の回答も含めてすべて削除され、復元できません。")) {
-            return;
-        }
         setError("");
         setIsDeleting(true);
         try {
@@ -248,11 +254,17 @@ export function AdminEventSettings({
         }
     };
 
+    // 「確定」は取り消せる操作だが、参加者から見える状態が変わるため確認を挟む。
+    // 確定操作そのものはメール送信を行わない（招待送信は次のダイアログで任意に行う別操作）。
     const confirmCandidate = async (idx: number | null) => {
         if (idx !== null) {
-            const ok = window.confirm("選択した日程で確定します。よろしいですか？\n\n参加者に通知メールが送信される可能性があります。");
-            if (!ok) return;
+            setPendingCandidateConfirmIdx(idx);
+            return;
         }
+        await performConfirmCandidate(null);
+    };
+
+    const performConfirmCandidate = async (idx: number | null) => {
         logActivity("日程確定開始", idx !== null ? `候補インデックス: ${idx}` : "確定解除");
         setError("");
         setIsConfirming(true);
@@ -301,18 +313,20 @@ export function AdminEventSettings({
     return (
         <form onSubmit={onSubmit} className="space-y-6">
             {needsGoogleReauth ? (
-                <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
-                    <p className="font-medium">Google カレンダー招待を送るには再ログインが必要です。</p>
-                    <p className="mt-1 text-amber-900">
+                <div className="rounded-md border bg-muted/30 p-4 text-sm">
+                    <p className="font-medium">Google カレンダーへの招待送信には追加のログインが必要です。</p>
+                    <p className="mt-1 text-muted-foreground">
                         {googleSessionEmail ? `${googleSessionEmail} で連携済みですが、` : ""}
-                        必要な権限が追加されたため、Google に再ログインして権限を更新してください。
+                        カレンダー登録・招待送信の機能を使うには、Google に再ログインして権限を追加してください（使わない場合はそのままで問題ありません）。
                     </p>
                     <div className="mt-3 flex justify-end">
                         <Button
                             type="button"
+                            variant="outline"
                             onClick={() => {
                                 const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
-                                window.location.href = `/api/google/auth/start?returnTo=${returnTo}`;
+                                // カレンダーへの予定作成・招待送信に使うため write スコープが必要
+                                window.location.href = `/api/google/auth/start?returnTo=${returnTo}&scope=write`;
                             }}
                         >
                             Google に再ログイン
@@ -340,14 +354,21 @@ export function AdminEventSettings({
                 </TabsList>
 
                 <TabsContent value="edit" className="space-y-2">
-                    <label className="text-sm font-medium">候補日程を編集</label>
-                    <div className="h-[720px] w-full">
-                        <PeriodSelector
-                            selectedPeriods={selectedPeriods}
+                    <label className="text-sm font-medium">{isDailyEvent ? "候補の日を編集" : "候補日程を編集"}</label>
+                    {isDailyEvent ? (
+                        <AllDayRangeSelector
+                            selected={selectedPeriods}
                             onChange={setSelectedPeriods}
-                            busyPeriodIds={[]}
                         />
-                    </div>
+                    ) : (
+                        <div className="h-[720px] w-full">
+                            <PeriodSelector
+                                selectedPeriods={selectedPeriods}
+                                onChange={setSelectedPeriods}
+                                busyPeriodIds={[]}
+                            />
+                        </div>
+                    )}
                 </TabsContent>
 
                 <TabsContent value="participants" className="space-y-2">
@@ -367,65 +388,142 @@ export function AdminEventSettings({
                     {participantSummaries.length === 0 ? (
                         <p className="text-sm text-muted-foreground py-8 text-center">まだ回答者はいません。</p>
                     ) : (
-                        <div className="rounded-md border overflow-x-auto">
-                            <table className="w-full text-sm">
-                                <thead>
-                                    <tr className="border-b bg-muted/50">
-                                        <th className="text-left px-4 py-2 font-medium">名前</th>
-                                        <th className="text-left px-4 py-2 font-medium">メールアドレス</th>
-                                        <th className="text-center px-3 py-2 font-medium text-green-600">
-                                            <span className="inline-flex items-center gap-1" aria-label="参加可能">
-                                                <CircleCheck className="h-4 w-4" aria-hidden="true" />○
+                        <>
+                            {/* モバイル: カード形式（横スクロール・メール省略なし） */}
+                            <div className="sm:hidden space-y-2">
+                                {participantSummaries.map((p) => (
+                                    <div key={p.id} className="rounded-md border p-3 space-y-2">
+                                        <div className="flex items-baseline justify-between gap-2">
+                                            <p className="font-medium">{p.name}</p>
+                                        </div>
+                                        {p.notificationEmail && (
+                                            <p className="text-xs text-muted-foreground break-all">{p.notificationEmail}</p>
+                                        )}
+                                        <div className="flex items-center gap-3 text-sm">
+                                            <span className="inline-flex items-center gap-1 text-green-600">
+                                                <CircleCheck className="h-4 w-4" aria-hidden="true" />○{p.ok}
                                             </span>
-                                        </th>
-                                        <th className="text-center px-3 py-2 font-medium text-amber-500">
-                                            <span className="inline-flex items-center gap-1" aria-label="未定／調整可">
-                                                <CircleAlert className="h-4 w-4" aria-hidden="true" />△
+                                            <span className="inline-flex items-center gap-1 text-amber-500">
+                                                <CircleAlert className="h-4 w-4" aria-hidden="true" />△{p.maybe}
                                             </span>
-                                        </th>
-                                        <th className="text-center px-3 py-2 font-medium text-red-500">
-                                            <span className="inline-flex items-center gap-1" aria-label="参加不可">
-                                                <CircleX className="h-4 w-4" aria-hidden="true" />×
+                                            <span className="inline-flex items-center gap-1 text-red-500">
+                                                <CircleX className="h-4 w-4" aria-hidden="true" />×{p.ng}
                                             </span>
-                                        </th>
-                                        <th className="text-left px-4 py-2 font-medium">コメント</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {participantSummaries.map((p) => (
-                                        <tr key={p.id} className="border-b last:border-b-0 hover:bg-muted/30">
-                                            <td className="px-4 py-2 font-medium whitespace-nowrap">{p.name}</td>
-                                            <td className="px-4 py-2 text-muted-foreground">{p.notificationEmail || "—"}</td>
-                                            <td className="text-center px-3 py-2 text-green-600">{p.ok}</td>
-                                            <td className="text-center px-3 py-2 text-amber-500">{p.maybe}</td>
-                                            <td className="text-center px-3 py-2 text-red-500">{p.ng}</td>
-                                            <td className="px-4 py-2 text-muted-foreground max-w-xs truncate">{p.comment || "—"}</td>
+                                        </div>
+                                        {p.comment && (
+                                            <p className="text-xs text-muted-foreground border-t pt-2">{p.comment}</p>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* デスクトップ/タブレット: 表形式 */}
+                            <div className="hidden sm:block rounded-md border overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b bg-muted/50">
+                                            <th className="text-left px-4 py-2 font-medium">名前</th>
+                                            <th className="text-left px-4 py-2 font-medium">メールアドレス</th>
+                                            <th className="text-center px-3 py-2 font-medium text-green-600">
+                                                <span className="inline-flex items-center gap-1" aria-label="参加可能">
+                                                    <CircleCheck className="h-4 w-4" aria-hidden="true" />○
+                                                </span>
+                                            </th>
+                                            <th className="text-center px-3 py-2 font-medium text-amber-500">
+                                                <span className="inline-flex items-center gap-1" aria-label="未定／調整可">
+                                                    <CircleAlert className="h-4 w-4" aria-hidden="true" />△
+                                                </span>
+                                            </th>
+                                            <th className="text-center px-3 py-2 font-medium text-red-500">
+                                                <span className="inline-flex items-center gap-1" aria-label="参加不可">
+                                                    <CircleX className="h-4 w-4" aria-hidden="true" />×
+                                                </span>
+                                            </th>
+                                            <th className="text-left px-4 py-2 font-medium">コメント</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                    </thead>
+                                    <tbody>
+                                        {participantSummaries.map((p) => (
+                                            <tr key={p.id} className="border-b last:border-b-0 hover:bg-muted/30">
+                                                <td className="px-4 py-2 font-medium whitespace-nowrap">{p.name}</td>
+                                                <td className="px-4 py-2 text-muted-foreground break-all">{p.notificationEmail || "—"}</td>
+                                                <td className="text-center px-3 py-2 text-green-600 tabular-nums">○{p.ok}</td>
+                                                <td className="text-center px-3 py-2 text-amber-500 tabular-nums">△{p.maybe}</td>
+                                                <td className="text-center px-3 py-2 text-red-500 tabular-nums">×{p.ng}</td>
+                                                <td className="px-4 py-2 text-muted-foreground max-w-xs truncate">{p.comment || "—"}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
                     )}
                 </TabsContent>
 
-                <TabsContent value="confirm" className="space-y-2">
-                    <div className="flex items-center justify-between">
-                        <label className="text-sm font-medium">最終確定候補（カレンダー上で選択）</label>
-                        <Button type="button" variant="outline" size="sm" disabled={isConfirming} onClick={() => confirmCandidate(null)}>
-                            未確定に戻す
-                        </Button>
+                <TabsContent value="confirm" className="space-y-3">
+                    {confirmedCandidateIdx !== null && sortedCandidates[confirmedCandidateIdx] && (
+                        <div className="space-y-2">
+                            <ConfirmedScheduleCard
+                                eventId={eventId}
+                                eventTitle={title}
+                                eventDescription={description}
+                                confirmedCandidate={sortedCandidates[confirmedCandidateIdx]}
+                            />
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() => {
+                                    setPendingConfirmedIdx(confirmedCandidateIdx);
+                                    setShowCalendarExportDialog(true);
+                                }}
+                            >
+                                <CalendarPlus className="h-4 w-4" />
+                                カレンダーに追加・招待を送る
+                            </Button>
+                        </div>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2">
+                        <label className="text-sm font-medium">{isDailyEvent ? "最終確定日程（一覧から選択）" : "最終確定日程（カレンダー上で選択）"}</label>
+                        <div className="flex items-center gap-2">
+                            {isConfirming && (
+                                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    処理中...
+                                </span>
+                            )}
+                            <Button type="button" variant="outline" size="sm" disabled={isConfirming} onClick={() => confirmCandidate(null)}>
+                                未確定に戻す
+                            </Button>
+                        </div>
                     </div>
-                    <AvailabilityTimeline
-                        candidates={sortedCandidates}
-                        availabilities={sortedCandidates.map(() => 2)}
-                        onStatusChange={() => { }}
-                        okCounts={okCounts}
-                        mode="admin"
-                        confirmedCandidateIdx={confirmedCandidateIdx}
-                        candidateStats={candidateStats}
-                        candidateParticipants={candidateParticipants}
-                        onConfirmCandidate={confirmCandidate}
-                    />
+                    {isDailyEvent ? (
+                        <DailyAvailabilityList
+                            candidates={sortedCandidates}
+                            availabilities={sortedCandidates.map(() => 2)}
+                            onStatusChange={() => { }}
+                            okCounts={okCounts}
+                            mode="admin"
+                            confirmedCandidateIdx={confirmedCandidateIdx}
+                            candidateStats={candidateStats}
+                            candidateParticipants={candidateParticipants}
+                            onConfirmCandidate={isConfirming ? undefined : confirmCandidate}
+                        />
+                    ) : (
+                        <AvailabilityTimeline
+                            candidates={sortedCandidates}
+                            availabilities={sortedCandidates.map(() => 2)}
+                            onStatusChange={() => { }}
+                            okCounts={okCounts}
+                            mode="admin"
+                            confirmedCandidateIdx={confirmedCandidateIdx}
+                            candidateStats={candidateStats}
+                            candidateParticipants={candidateParticipants}
+                            onConfirmCandidate={isConfirming ? undefined : confirmCandidate}
+                        />
+                    )}
                     <p className="text-xs text-muted-foreground">
                         現在の回答者数: {participants.length}人
                     </p>
@@ -469,6 +567,41 @@ export function AdminEventSettings({
                 />
             )}
 
+            <ConfirmDialog
+                open={pendingCandidateConfirmIdx !== null}
+                onOpenChange={(open) => {
+                    if (!open) setPendingCandidateConfirmIdx(null);
+                }}
+                title="この日程で確定しますか？"
+                description="確定すると参加者の結果ページに表示されます。この操作自体は招待メールを送信しません（送信するかどうかは次の画面で選べます）。後から「未確定に戻す」で取り消せます。"
+                confirmText="確定する"
+                destructive={false}
+                onConfirm={() => {
+                    if (pendingCandidateConfirmIdx !== null) void performConfirmCandidate(pendingCandidateConfirmIdx);
+                    setPendingCandidateConfirmIdx(null);
+                }}
+            />
+
+            <ConfirmDialog
+                open={showDuplicateConfirm}
+                onOpenChange={setShowDuplicateConfirm}
+                title="イベントを複製しますか？"
+                description="同じ候補日程・説明・管理者パスワードで新しいイベントを作成します。回答はコピーされません。"
+                confirmText="複製する"
+                destructive={false}
+                onConfirm={handleDuplicateEvent}
+            />
+
+            <ConfirmDialog
+                open={showDeleteConfirm}
+                onOpenChange={setShowDeleteConfirm}
+                title="本当に完全削除しますか？"
+                description={`「${title}」とその参加者・回答をすべて削除します。この操作は取り消せません。`}
+                confirmText="完全に削除する"
+                destructive
+                onConfirm={handleDeleteEvent}
+            />
+
             {/* 設定操作 */}
             <div className="mt-12 rounded-md border bg-card/40 p-4 space-y-3">
                 <div>
@@ -481,7 +614,7 @@ export function AdminEventSettings({
                     type="button"
                     variant="outline"
                     disabled={isDuplicating}
-                    onClick={handleDuplicateEvent}
+                    onClick={() => setShowDuplicateConfirm(true)}
                 >
                     {isDuplicating ? "複製中..." : "イベントを複製"}
                 </Button>
@@ -491,8 +624,13 @@ export function AdminEventSettings({
             <div className="mt-6 rounded-md border border-destructive/40 bg-destructive/5 p-4 space-y-3">
                 <div>
                     <h3 className="text-sm font-semibold text-destructive">イベントを完全削除</h3>
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-xs font-medium text-destructive/90 mt-1">
+                        {participants.length > 0
+                            ? `参加者${participants.length}人分の回答を含め、`
+                            : ""}
                         イベント本体・参加者・回答をすべて削除します。この操作は取り消せません。
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
                         確認のため、下にイベントタイトル「{title}」をそのまま入力してください。
                     </p>
                 </div>
@@ -508,7 +646,7 @@ export function AdminEventSettings({
                         type="button"
                         variant="destructive"
                         disabled={isDeleting || deleteConfirmText !== title}
-                        onClick={handleDeleteEvent}
+                        onClick={() => setShowDeleteConfirm(true)}
                     >
                         {isDeleting ? "削除中..." : "完全に削除する"}
                     </Button>

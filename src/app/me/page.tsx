@@ -46,15 +46,16 @@ export default function MyEventsPage() {
             <header className="flex items-center justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold">作成したイベント</h1>
-                    <p className="text-xs text-muted-foreground mt-1">
-                        この端末で作成されたイベントが表示されます。
-                        別の端末で作ったものや、ブラウザのデータを消したものは表示されません。
-                    </p>
                 </div>
                 <Link href="/create">
                     <Button>新規作成</Button>
                 </Link>
             </header>
+
+            <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
+                この一覧は「この端末のこのブラウザ」に保存された情報だけを頼りに表示しています。アカウント登録はしていないため、別の端末・別のブラウザや、ブラウザのデータ（Cookie・サイトデータ）を消すと一覧から消えます（イベント自体は削除されません）。
+                「管理」を開く際は、この一覧に載っていても引き続き管理者パスワードの入力が必要です。
+            </div>
 
             {hasUserId === false && (
                 <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">

@@ -81,6 +81,20 @@
 		}
 	],
 	/**
+	 * Flagship (Feature Flags) — optional.
+	 * Used only for a remotely-toggleable maintenance-mode flag (`maintenance-mode`).
+	 * If this binding is omitted entirely, maintenance mode simply stays off
+	 * (fail-safe) — the app works fine without it. Only add this if you want
+	 * the ability to flip the site into maintenance mode without a redeploy.
+	 * https://developers.cloudflare.com/flagship/
+	 */
+	// "flagship": [
+	// 	{
+	// 		"binding": "FLAGS",
+	// 		"app_id": "<YOUR_FLAGSHIP_APP_ID>"
+	// 	}
+	// ],
+	/**
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 * Note: Use secrets to store sensitive data.

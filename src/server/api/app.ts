@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { sValidator } from "@hono/standard-validator";
-import { eventsRoutes, googleRoutes, usersRoutes, officeHoursRoutes, shiftsRoutes, adminRoutes } from "./routes";
+import { eventsRoutes, googleRoutes, usersRoutes, officeHoursRoutes, adminRoutes } from "./routes";
 import { syncCalendarSchema, syncICalSchema } from "./schemas";
 import { CampusSquareService } from "@/lib/campus-square";
 import { parseICal } from "@/lib/ical";
 import { safeFetchText } from "@/lib/safe-fetch";
-import { captureException } from "@/lib/wana";
+import { captureException, getWanaIngestUrl, getNormalizedDsn } from "@/lib/wana";
 
 type Bindings = {
     DB: D1Database;
@@ -18,7 +18,6 @@ apiApp.route("/events", eventsRoutes);
 apiApp.route("/google", googleRoutes);
 apiApp.route("/users", usersRoutes);
 apiApp.route("/office-hours", officeHoursRoutes);
-apiApp.route("/shifts", shiftsRoutes);
 apiApp.route("/admin", adminRoutes);
 
 apiApp.post("/sync-calendar", sValidator("json", syncCalendarSchema), async (c) => {
@@ -40,6 +39,49 @@ apiApp.post("/sync-ical", sValidator("json", syncICalSchema), async (c) => {
     } catch (error) {
         console.error("[sync-ical]", error);
         return c.json({ error: "Failed to fetch or parse iCal URL" }, 400);
+    }
+});
+
+/** envelope の最大サイズ。イベント1件＋スタックトレースには十分な余裕。 */
+const WANA_ENVELOPE_MAX_BYTES = 200_000;
+
+/**
+ * ブラウザ → Wana の同一オリジントンネル（Sentry の tunnel オプション相当）。
+ * ingest ドメインへの直接 POST は広告ブロッカー（EasyPrivacy の
+ * `/envelope/?sentry_key=` パターン）に遮断されるため、クライアントは
+ * まずこのパスに envelope を送り、Worker が ingest へ中継する。
+ * 自プロジェクトの DSN を持つ envelope 以外は中継しない。
+ */
+apiApp.post("/wana/envelope", async (c) => {
+    const ingestUrl = getWanaIngestUrl();
+    const expectedDsn = getNormalizedDsn();
+    if (!ingestUrl || !expectedDsn) {
+        return c.json({ error: "Wana is not configured" }, 501);
+    }
+
+    const body = await c.req.text();
+    if (!body || body.length > WANA_ENVELOPE_MAX_BYTES) {
+        return c.json({ error: "Invalid envelope" }, 400);
+    }
+    try {
+        const header = JSON.parse(body.slice(0, body.indexOf("\n"))) as { dsn?: string };
+        if (header.dsn !== expectedDsn) {
+            return c.json({ error: "Invalid envelope" }, 400);
+        }
+    } catch {
+        return c.json({ error: "Invalid envelope" }, 400);
+    }
+
+    try {
+        const res = await fetch(ingestUrl, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+            body,
+            signal: AbortSignal.timeout(10_000),
+        });
+        return c.json({ ok: res.ok }, res.ok ? 200 : 502);
+    } catch {
+        return c.json({ ok: false }, 502);
     }
 });
 

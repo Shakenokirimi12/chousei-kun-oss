@@ -6,6 +6,7 @@ export interface CalendarEvent {
     location?: string;
     description?: string;
     rrule?: string;
+    allDay: boolean;
 }
 
 export class CampusSquareService {
@@ -196,6 +197,13 @@ export class CampusSquareService {
                 const dtstartRaw = getField('DTSTART');
                 const dtendRaw = getField('DTEND');
 
+                // 終日（時刻を持たない YYYYMMDD のみ、または ;VALUE=DATE 指定）かどうか
+                const isAllDayRaw = (raw: string): boolean => {
+                    if (/;VALUE=DATE\b/i.test(raw)) return true;
+                    const cleaned = raw.replace(/^[^:]*:/, '');
+                    return /^\d{8}$/.test(cleaned);
+                };
+
                 const parseICSDate = (raw: string): Date => {
                     const cleaned = raw.replace(/^[^:]*:/, '');
                     const match = cleaned.match(/(\d{4})(\d{2})(\d{2})T?(\d{2})?(\d{2})?(\d{2})?/);
@@ -222,6 +230,7 @@ export class CampusSquareService {
                         summary: cleanSummary,
                         dtstart: parseICSDate(dtstartRaw),
                         dtend: dtendRaw ? parseICSDate(dtendRaw) : parseICSDate(dtstartRaw),
+                        allDay: isAllDayRaw(dtstartRaw),
                     });
                 }
             } catch (e) {

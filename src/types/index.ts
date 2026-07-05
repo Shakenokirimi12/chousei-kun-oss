@@ -41,10 +41,19 @@ export type GoogleSessionStatus = {
     hasUserId: boolean;
 };
 
-export type CandidateWindow = {
-    startDateTime: string;
-    endDateTime: string;
-};
+export type CandidateWindow =
+    | {
+          allDay?: false;
+          startDateTime: string;
+          endDateTime: string;
+      }
+    | {
+          allDay: true;
+          /** YYYY-MM-DD */
+          startDate: string;
+          /** YYYY-MM-DD（排他的: 当日の翌日） */
+          endDateExclusive: string;
+      };
 
 // --- Office Hour ---
 export type OfficeHour = InferSelectModel<typeof officeHours>;
