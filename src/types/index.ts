@@ -11,7 +11,7 @@ export type EventWithCandidates = Omit<Event, "candidates"> & {
     candidates: string[];
 };
 
-export type EventPublicView = Pick<Event, "id" | "title" | "description" | "confirmedCandidateIdx"> & {
+export type EventPublicView = Pick<Event, "id" | "title" | "description" | "confirmedCandidateIdx" | "resultsVisibleToAll"> & {
     candidates: string[];
 };
 

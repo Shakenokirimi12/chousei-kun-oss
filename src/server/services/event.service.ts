@@ -23,6 +23,7 @@ export class EventService {
                 description: true,
                 candidates: true,
                 confirmedCandidateIdx: true,
+                resultsVisibleToAll: true,
             },
         });
         if (!event) return null;

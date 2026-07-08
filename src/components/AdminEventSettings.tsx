@@ -23,6 +23,7 @@ type Props = {
     initialDescription: string;
     initialCandidates: string[];
     initialConfirmedCandidateIdx: number | null;
+    initialResultsVisibleToAll: boolean;
     participants: { id: string; name: string; comment: string | null; notificationEmail?: string | null }[];
     availabilities: { participantId: string; candidateIdx: number; status: number }[];
 };
@@ -33,6 +34,7 @@ export function AdminEventSettings({
     initialDescription,
     initialCandidates,
     initialConfirmedCandidateIdx,
+    initialResultsVisibleToAll,
     participants,
     availabilities,
 }: Props) {
@@ -57,6 +59,33 @@ export function AdminEventSettings({
     const completeTimerRef = useRef<NodeJS.Timeout | null>(null);
     // 「日毎の出欠確認」イベントか。編集UIも終日用セレクタに切り替える（種別の変更は不可）
     const isDailyEvent = useMemo(() => isAllDayEvent(initialCandidates), [initialCandidates]);
+    const [resultsVisibleToAll, setResultsVisibleToAll] = useState(initialResultsVisibleToAll);
+    const [isSavingVisibility, setIsSavingVisibility] = useState(false);
+    const [visibilityError, setVisibilityError] = useState("");
+
+    const handleToggleResultsVisibility = async (checked: boolean) => {
+        const previous = resultsVisibleToAll;
+        setVisibilityError("");
+        setResultsVisibleToAll(checked);
+        setIsSavingVisibility(true);
+        try {
+            const res = await fetch(`/api/events/${eventId}/admin/results-visibility`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ resultsVisibleToAll: checked }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({})) as { error?: string };
+                throw new Error(data.error || "設定の更新に失敗しました。");
+            }
+            router.refresh();
+        } catch (err) {
+            setResultsVisibleToAll(previous);
+            setVisibilityError(err instanceof Error ? err.message : "設定の更新に失敗しました。");
+        } finally {
+            setIsSavingVisibility(false);
+        }
+    };
 
     useEffect(() => {
         let cancelled = false;
@@ -345,6 +374,33 @@ export function AdminEventSettings({
                     <Input value={description} onChange={(e) => setDescription(e.target.value)} />
                 </div>
             </div>
+
+            {isDailyEvent && (
+                <div className="rounded-md border bg-card/40 p-4 space-y-2">
+                    <label className="flex items-start gap-2 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={resultsVisibleToAll}
+                            onChange={(e) => void handleToggleResultsVisibility(e.target.checked)}
+                            disabled={isSavingVisibility}
+                            className="h-4 w-4 mt-0.5 accent-primary"
+                        />
+                        <span className="text-sm">
+                            <span className="font-medium">回答結果を参加者全員に公開する</span>
+                            <span className="block text-xs text-muted-foreground mt-0.5">
+                                オフにすると、参加者は結果ページで自分の回答内容のみ確認できます（他の参加者の名前・回答内訳は非表示）。確定した日程はオフでも表示されます。
+                            </span>
+                        </span>
+                    </label>
+                    {isSavingVisibility && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            保存中...
+                        </p>
+                    )}
+                    {visibilityError && <p className="text-xs text-destructive">{visibilityError}</p>}
+                </div>
+            )}
 
             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "edit" | "confirm" | "participants")} className="w-full">
                 <TabsList>

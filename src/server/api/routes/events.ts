@@ -14,7 +14,9 @@ import {
     addToCalendarSchema,
     updateNotificationSchema,
     ownParticipantParamSchema,
+    updateResultsVisibilitySchema,
 } from "../schemas";
+import { isAllDayEvent } from "@/lib/candidates";
 import {
     parseCookieValue,
     refreshGoogleTokenIfNeeded,
@@ -427,6 +429,7 @@ eventsRoutes.post(
                     adminPasswordHash: true,
                     adminAccessToken: true,
                     createdByUserId: true,
+                    resultsVisibleToAll: true,
                 },
             });
             if (!src) return c.json({ error: "Event not found" }, 404);
@@ -441,6 +444,7 @@ eventsRoutes.post(
                 adminPasswordHash: src.adminPasswordHash,
                 adminAccessToken: src.adminAccessToken,
                 createdByUserId: src.createdByUserId,
+                resultsVisibleToAll: src.resultsVisibleToAll,
             });
             
             c.header(
@@ -634,6 +638,42 @@ eventsRoutes.patch(
             ).bind(title, description || null, JSON.stringify(nextCandidates), id)
         );
         await c.env.DB.batch(statements);
+
+        return c.json({ ok: true });
+    }
+);
+
+/**
+ * 管理者: 回答結果を全員に公開するかどうかを切り替える。
+ * 「日毎の出欠確認（終日）」イベントのみ非公開にできる（時間帯調整イベントは常に全員公開）。
+ */
+eventsRoutes.patch(
+    "/:id/admin/results-visibility",
+    sValidator("param", eventIdParamSchema),
+    sValidator("json", updateResultsVisibilitySchema),
+    async (c) => {
+        const db = createDb(c.env.DB);
+        const { id } = c.req.valid("param");
+        const { resultsVisibleToAll } = c.req.valid("json");
+
+        const auth = await verifyAdminSession(c, id);
+        if (!auth.authorized) return c.json({ error: auth.error }, 401);
+
+        const currentEvent = await db.query.events.findFirst({
+            where: eq(events.id, id),
+            columns: { candidates: true },
+        });
+        if (!currentEvent) return c.json({ error: "Event not found" }, 404);
+
+        const candidates = safeJsonParse<string[]>(currentEvent.candidates, "events.candidates") ?? [];
+        if (!resultsVisibleToAll && !isAllDayEvent(candidates)) {
+            return c.json({ error: "この設定は日毎の出欠確認（終日）イベントのみ変更できます" }, 400);
+        }
+
+        await db
+            .update(events)
+            .set({ resultsVisibleToAll: resultsVisibleToAll ? 1 : 0 })
+            .where(eq(events.id, id));
 
         return c.json({ ok: true });
     }

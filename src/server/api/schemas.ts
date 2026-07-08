@@ -68,6 +68,10 @@ export const adminUpdateSchema = z.object({
     candidates: candidatesSchema,
 });
 
+export const updateResultsVisibilitySchema = z.object({
+    resultsVisibleToAll: z.boolean(),
+});
+
 export const confirmCandidateSchema = z.object({
     confirmedCandidateIdx: z.number().int().min(0).nullable(),
     skipCalendarInvite: z.boolean().optional().default(false),

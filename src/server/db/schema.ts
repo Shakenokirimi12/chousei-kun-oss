@@ -30,6 +30,11 @@ export const events = sqliteTable("events", {
     confirmedCandidateIdx: integer("confirmed_candidate_idx"),
     /** デバイス（localStorage の userId）と紐付ける作成者識別子。任意。 */
     createdByUserId: text("created_by_user_id"),
+    /**
+     * 回答結果（他の参加者の名前・回答内訳）を全員に公開するか。
+     * 日毎の出欠確認（終日）イベントでのみ false にできる（時間帯調整イベントは常に true 相当）。
+     */
+    resultsVisibleToAll: integer("results_visible_to_all").notNull().default(1),
 });
 
 /**

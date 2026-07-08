@@ -50,6 +50,7 @@ export default async function AdminPage({ params }: { params: Promise<{ id: stri
           initialDescription={event.description ?? ""}
           initialCandidates={event.candidates}
           initialConfirmedCandidateIdx={event.confirmedCandidateIdx ?? null}
+          initialResultsVisibleToAll={event.resultsVisibleToAll === 1}
           participants={participants.map((p) => ({
             id: p.id,
             name: p.name,
