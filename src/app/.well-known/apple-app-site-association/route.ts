@@ -25,17 +25,29 @@ const APP_ID_RE = /^[A-Z0-9]{10}\.[A-Za-z0-9.-]+$/;
  */
 const EVENT_ID_GLOB = "/????????-????-????-????-????????????";
 
+function parseAppIDs(raw: string | undefined): string[] {
+	return (raw ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => APP_ID_RE.test(s));
+}
+
 export async function GET() {
 	let appIDs: string[] = [];
+	let clipIDs: string[] = [];
 	try {
 		const { env } = await getCloudflareContext();
-		const raw = (env as unknown as { IOS_APP_ID?: string }).IOS_APP_ID ?? process.env.IOS_APP_ID;
-		appIDs = (raw ?? "")
-			.split(",")
-			.map((s) => s.trim())
-			.filter((s) => APP_ID_RE.test(s));
+		const vars = env as unknown as { IOS_APP_ID?: string; IOS_APP_CLIP_ID?: string };
+		appIDs = parseAppIDs(vars.IOS_APP_ID ?? process.env.IOS_APP_ID);
+		// App Clip の App ID は既定で「本体 + .Clip」。別の Bundle ID を使う場合は
+		// IOS_APP_CLIP_ID で明示的に上書きする。
+		clipIDs = parseAppIDs(vars.IOS_APP_CLIP_ID ?? process.env.IOS_APP_CLIP_ID);
+		if (clipIDs.length === 0) {
+			clipIDs = appIDs.map((id) => `${id}.Clip`);
+		}
 	} catch {
 		appIDs = [];
+		clipIDs = [];
 	}
 
 	if (appIDs.length === 0) {
@@ -54,6 +66,12 @@ export async function GET() {
 					],
 				},
 			],
+		},
+		// アプリ未インストールの端末で App Clip を起動させるための宣言。
+		// 実際にどの URL でカードを出すかは App Store Connect の
+		// App Clip Experience 設定で決める。
+		appclips: {
+			apps: clipIDs,
 		},
 	};
 
