@@ -4,6 +4,7 @@
 	"description": "An open-source scheduling application built with Next.js and Cloudflare D1",
 	"author": "Chosei-kun Authors",
 	"license": "MIT",
+	"packageManager": "pnpm@11.6.0",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/shakenokiri/chousei-kun-oss.git"
@@ -24,6 +25,7 @@
 	"dependencies": {
 		"@ai-sdk/openai": "^3.0.64",
 		"@hono/standard-validator": "^0.2.2",
+		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@opennextjs/cloudflare": "^1.15.1",
 		"@radix-ui/react-dialog": "^1.1.15",
 		"@radix-ui/react-label": "^2.1.8",
@@ -31,6 +33,7 @@
 		"@radix-ui/react-separator": "^1.1.8",
 		"@radix-ui/react-slot": "^1.2.4",
 		"@radix-ui/react-tabs": "^1.1.13",
+		"agents": "^0.22.0",
 		"ai": "^6.0.184",
 		"budoux": "^0.7.0",
 		"class-variance-authority": "^0.7.1",
