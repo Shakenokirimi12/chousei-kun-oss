@@ -1,4 +1,7 @@
 allowBuilds:
   core-js-pure: false
   esbuild: true
+  # sharp / unrs-resolver は Next.js の任意依存。Workers では使わないのでビルドしない。
+  sharp: false
+  unrs-resolver: false
   workerd: true

@@ -7,7 +7,7 @@
 	"name": "chosei-kun",
 	// OpenNext がビルドした `.open-next/worker.js` をラップし、Cron Trigger 用の
 	// scheduled ハンドラを追加するエントリポイント。
-	"main": ".open-next/worker.js",
+	"main": "worker.ts",
 	"compatibility_date": "2025-12-01",
 	"compatibility_flags": [
 		"nodejs_compat",
@@ -40,6 +40,19 @@
 	"triggers": {
 		"crons": ["*/15 * * * *"]
 	},
+	/**
+	 * リモート MCP サーバー（src/server/mcp/agent.ts）用の Durable Object。
+	 * `/api/mcp` に接続する MCP クライアントのセッション状態を保持する。
+	 * https://developers.cloudflare.com/agents/api-reference/mcp-agent-api/
+	 */
+	"durable_objects": {
+		"bindings": [
+			{ "name": "MCP_AGENT", "class_name": "ChouseiMcpAgent" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1-mcp-agent", "new_sqlite_classes": ["ChouseiMcpAgent"] }
+	],
 	"keep_names": false,
 	/**
 	 * Smart Placement
@@ -107,5 +120,8 @@
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
+	"vars": {
+		// iOS アプリ（調整くん）の Universal Links / App Clip 用。AASA の配信を有効にする。
+		"IOS_APP_ID": "9Y6GVCK77H.com.soshosai.chouseikun"
+	}
 }
