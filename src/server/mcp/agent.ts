@@ -12,7 +12,8 @@ import { siteConfig } from "@/config/site";
 import { createEventSchema, participateSchema, confirmCandidateSchema } from "@/server/api/schemas";
 import { replaceAvailabilities } from "@/server/api/routes/events";
 import type { EventService } from "@/server/services/event.service";
-import { createEventService } from "@/server/services";
+import { createEventService, createUserService } from "@/server/services";
+import { enforceRateLimit, type RateLimitBinding } from "@/server/api/rate-limit";
 
 function eventUrl(id: string): string {
     return `${siteConfig.url}/${id}`;
@@ -26,22 +27,34 @@ function jsonResult(data: unknown) {
     return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
+const TOO_MANY_ATTEMPTS = "試行回数が多すぎます。しばらくしてから再度お試しください。";
+
+/** worker.ts が ctx.props 経由で渡す、セッション開始時の接続元情報。 */
+export type McpProps = { ip?: string };
+
 /**
  * 管理者操作用のパスワード検証。ブラウザの admin セッション Cookie に相当するものが
  * MCP 経由の呼び出しには無いため、ツール呼び出しごとに adminPassword を直接検証する。
+ *
+ * HTTP の /admin-auth と同じく、イベント + IP 単位で AUTH_RATE_LIMITER を掛ける。
+ * 掛けないと MCP が総当たりの抜け道になる。
  */
 async function verifyAdminPassword(
     db: DbClient,
+    limiter: RateLimitBinding | undefined,
+    ip: string,
     eventId: string,
     password: string
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: true } | { ok: false; error: string }> {
+    const allowed = await enforceRateLimit(limiter, `auth:${eventId}:${ip}`);
+    if (!allowed) return { ok: false, error: TOO_MANY_ATTEMPTS };
     const event = await db.query.events.findFirst({
         where: eq(events.id, eventId),
         columns: { adminPasswordHash: true },
     });
-    if (!event) return { ok: false };
+    if (!event) return { ok: false, error: "Event not found" };
     const result = await verifyPassword(password, event.adminPasswordHash);
-    return { ok: result.ok };
+    return result.ok ? { ok: true } : { ok: false, error: "Invalid password" };
 }
 
 async function getPublicParticipants(eventService: EventService, eventId: string) {
@@ -52,13 +65,21 @@ async function getPublicParticipants(eventService: EventService, eventId: string
 
 type State = Record<string, never>;
 
-export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<string, never>> {
+export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
     server = new McpServer({
         name: "chousei-kun",
         version: "0.1.0",
     });
 
     initialState: State = {};
+
+    private get clientIp(): string {
+        return this.props?.ip ?? "unknown";
+    }
+
+    private verifyAdmin(db: DbClient, eventId: string, password: string) {
+        return verifyAdminPassword(db, this.env.AUTH_RATE_LIMITER, this.clientIp, eventId, password);
+    }
 
     async init() {
         this.server.registerTool(
@@ -147,9 +168,12 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<stri
                 });
                 if (!event) return errorResult("Event not found");
 
-                const isAdmin = adminPassword
-                    ? (await verifyPassword(adminPassword, event.adminPasswordHash)).ok
-                    : false;
+                let isAdmin = false;
+                if (adminPassword) {
+                    const auth = await this.verifyAdmin(db, eventId, adminPassword);
+                    if (!auth.ok && auth.error === TOO_MANY_ATTEMPTS) return errorResult(auth.error);
+                    isAdmin = auth.ok;
+                }
 
                 const base = {
                     id: event.id,
@@ -195,6 +219,12 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<stri
                 const normalizedNotificationEmail = notificationEmail?.trim() ? notificationEmail.trim() : null;
                 if (notifyOnFinalize && !normalizedNotificationEmail) {
                     return errorResult("通知を受け取る場合は notificationEmail が必要です");
+                }
+
+                // participants.user_id は users への外部キー。Web は事前に /api/users/register を
+                // 呼ぶが MCP にはその手順が無いので、ここで同じ getOrCreate を行う。
+                if (userId) {
+                    await createUserService(db).getOrCreate(userId);
                 }
 
                 const newParticipantId = participantId ?? crypto.randomUUID();
@@ -251,8 +281,8 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<stri
             },
             async ({ eventId, adminPassword, confirmedCandidateIdx }) => {
                 const db = createDb(this.env.DB);
-                const auth = await verifyAdminPassword(db, eventId, adminPassword);
-                if (!auth.ok) return errorResult("Invalid password");
+                const auth = await this.verifyAdmin(db, eventId, adminPassword);
+                if (!auth.ok) return errorResult(auth.error);
 
                 const currentEvent = await db.query.events.findFirst({
                     where: eq(events.id, eventId),
@@ -281,8 +311,8 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<stri
             },
             async ({ eventId, adminPassword }) => {
                 const db = createDb(this.env.DB);
-                const auth = await verifyAdminPassword(db, eventId, adminPassword);
-                if (!auth.ok) return errorResult("Invalid password");
+                const auth = await this.verifyAdmin(db, eventId, adminPassword);
+                if (!auth.ok) return errorResult(auth.error);
 
                 const src = await db.query.events.findFirst({
                     where: eq(events.id, eventId),
@@ -324,8 +354,8 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<stri
             },
             async ({ eventId, adminPassword }) => {
                 const db = createDb(this.env.DB);
-                const auth = await verifyAdminPassword(db, eventId, adminPassword);
-                if (!auth.ok) return errorResult("Invalid password");
+                const auth = await this.verifyAdmin(db, eventId, adminPassword);
+                if (!auth.ok) return errorResult(auth.error);
 
                 const event = await db.query.events.findFirst({
                     where: eq(events.id, eventId),
@@ -380,8 +410,8 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, Record<stri
             },
             async ({ eventId, adminPassword, resultsVisibleToAll }) => {
                 const db = createDb(this.env.DB);
-                const auth = await verifyAdminPassword(db, eventId, adminPassword);
-                if (!auth.ok) return errorResult("Invalid password");
+                const auth = await this.verifyAdmin(db, eventId, adminPassword);
+                if (!auth.ok) return errorResult(auth.error);
 
                 const currentEvent = await db.query.events.findFirst({
                     where: eq(events.id, eventId),
