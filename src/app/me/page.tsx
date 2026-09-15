@@ -17,10 +17,40 @@ interface EventSummary {
 
 const USER_ID_KEY = "chosei_user_id";
 
+/** iPad Safari はデスクトップ UA を名乗るので、タッチ対応の Mac も iOS 扱いにする。 */
+function isIOSDevice(): boolean {
+    if (typeof navigator === "undefined") return false;
+    const ua = navigator.userAgent;
+    return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * iOS アプリに利用者 ID を渡す。
+ *
+ * 同一ドメイン内で踏んだ Universal Link は iOS が Safari で開いてしまうので、
+ * カスタムスキームで起動する。アプリが無いと何も起きないため、一定時間たっても
+ * ページが隠れなければ /app/import（案内ページ）へ送る。ID はサーバーに送らない。
+ */
+function openInApp(uid: string) {
+    const host = window.location.host;
+    const fallback = `/app/import#uid=${encodeURIComponent(uid)}`;
+    // インストール済みだと Safari が「開きますか？」を出し、その間ページは隠れない。
+    // 迷っている間に案内ページへ飛ばないよう、少し長めに待つ。
+    const timer = window.setTimeout(() => {
+        if (document.visibilityState === "visible") window.location.href = fallback;
+    }, 2500);
+    const cancel = () => window.clearTimeout(timer);
+    document.addEventListener("visibilitychange", cancel, { once: true });
+    window.addEventListener("pagehide", cancel, { once: true });
+    window.location.href = `chouseikun://import?host=${encodeURIComponent(host)}&uid=${encodeURIComponent(uid)}`;
+}
+
 export default function MyEventsPage() {
     const [items, setItems] = useState<EventSummary[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [hasUserId, setHasUserId] = useState<boolean | null>(null);
+    // iOS アプリへの引き継ぎ対象の利用者 ID。iOS 端末でだけ持つ。
+    const [appImportUid, setAppImportUid] = useState<string | null>(null);
 
     useEffect(() => {
         const uid = localStorage.getItem(USER_ID_KEY);
@@ -29,6 +59,9 @@ export default function MyEventsPage() {
             return;
         }
         setHasUserId(true);
+        if (isIOSDevice()) {
+            setAppImportUid(uid);
+        }
         (async () => {
             try {
                 const res = await fetch(`/api/events/by-creator/${uid}`);
@@ -80,6 +113,17 @@ export default function MyEventsPage() {
                 <p className="text-sm text-muted-foreground py-12 text-center">
                     まだ作成されたイベントはありません。
                 </p>
+            )}
+
+            {appImportUid && items && items.length > 0 && (
+                <div className="rounded-md border p-3 text-sm flex items-center justify-between gap-4">
+                    <span className="text-muted-foreground">
+                        調整くん iOS アプリを入れていれば、この一覧をアプリに引き継げます。
+                    </span>
+                    <Button size="sm" variant="outline" className="shrink-0" onClick={() => openInApp(appImportUid)}>
+                        アプリに引き継ぐ
+                    </Button>
+                </div>
             )}
 
             {items && items.length > 0 && (
