@@ -13,7 +13,6 @@
 import openNextWorker from "./.open-next/worker.js";
 import { syncAllActive } from "./src/server/cron/sync-host-busy";
 import { ChouseiMcpAgent, type McpProps } from "./src/server/mcp/agent";
-import { enforceRateLimit, type RateLimitBinding } from "./src/server/api/rate-limit";
 import { isMaintenanceMode, MAINTENANCE_JSON_BODY, MAINTENANCE_RETRY_AFTER_SECONDS } from "./src/lib/maintenance";
 
 // Durable Object クラス類は OpenNext が同 worker から re-export している前提なので
@@ -35,16 +34,16 @@ export { ChouseiMcpAgent };
 type Env = {
     DB: D1Database;
     MCP_AGENT: DurableObjectNamespace<ChouseiMcpAgent>;
-    WRITE_RATE_LIMITER?: RateLimitBinding;
 };
 
 const mcpHandler = ChouseiMcpAgent.serve("/api/mcp", { binding: "MCP_AGENT" });
 
 /**
  * MCP は OpenNext（= Next.js の proxy とHono のミドルウェア）を通らないので、
- * そちらで掛けているメンテナンスモードと書き込みレート制限をここで同等に掛ける。
- * 掛けないと、メンテ中も MCP 経由の書き込みが通り、管理パスワードの総当たりも
- * 無制限になる（HTTP 側は AUTH_RATE_LIMITER / WRITE_RATE_LIMITER で抑えている）。
+ * そちらで掛けているメンテナンスモードをここで同等に掛ける。レート制限は
+ * HTTP と同じ粒度（パスワード検証と回答をイベント + IP 単位）で agent.ts 側が
+ * 掛ける。ここで POST 全体を IP 単位で絞ると、共有 NAT からの通常利用が
+ * initialize / tools/list だけで上限に達してセッションが壊れる。
  */
 async function handleMcp(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (await isMaintenanceMode(env)) {
@@ -55,12 +54,6 @@ async function handleMcp(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-    if (request.method === "POST") {
-        const allowed = await enforceRateLimit(env.WRITE_RATE_LIMITER, `mcp:${ip}`);
-        if (!allowed) {
-            return Response.json({ error: "試行回数が多すぎます。しばらくしてから再度お試しください。" }, { status: 429 });
-        }
-    }
 
     // McpAgent は ctx.props を Durable Object の this.props として渡す。ctx.props は
     // 読み取り専用なので、メソッドを束縛した別オブジェクトに props を載せて渡す。
