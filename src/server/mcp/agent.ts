@@ -215,6 +215,10 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                 });
                 if (!event) return errorResult("Event not found");
 
+                // HTTP の POST /:id/participate と同じ粒度（イベント + IP）で回答の連投を抑える。
+                const allowed = await enforceRateLimit(this.env.WRITE_RATE_LIMITER, `participate:${eventId}:${this.clientIp}`);
+                if (!allowed) return errorResult(TOO_MANY_ATTEMPTS);
+
                 const normalizedComment = comment || null;
                 const normalizedNotificationEmail = notificationEmail?.trim() ? notificationEmail.trim() : null;
                 if (notifyOnFinalize && !normalizedNotificationEmail) {
