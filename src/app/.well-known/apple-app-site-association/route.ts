@@ -63,6 +63,9 @@ export async function GET() {
 						{ "/": EVENT_ID_GLOB, comment: "回答画面" },
 						{ "/": `${EVENT_ID_GLOB}/results`, comment: "回答結果" },
 						{ "/": `${EVENT_ID_GLOB}/admin`, comment: "管理画面" },
+						// /me の「アプリに引き継ぐ」。利用者 ID は fragment に載せるので
+						// AASA のパス照合にもサーバーログにも現れない。
+						{ "/": "/app/import", comment: "ブラウザからアプリへの引き継ぎ" },
 					],
 				},
 			],
