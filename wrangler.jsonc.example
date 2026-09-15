@@ -38,6 +38,19 @@
 	"triggers": {
 		"crons": ["*/15 * * * *"]
 	},
+	/**
+	 * リモート MCP サーバー（src/server/mcp/agent.ts）用の Durable Object。
+	 * `/api/mcp` に接続する MCP クライアントのセッション状態を保持する。
+	 * https://developers.cloudflare.com/agents/api-reference/mcp-agent-api/
+	 */
+	"durable_objects": {
+		"bindings": [
+			{ "name": "MCP_AGENT", "class_name": "ChouseiMcpAgent" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1-mcp-agent", "new_sqlite_classes": ["ChouseiMcpAgent"] }
+	],
 	"keep_names": false,
 	/**
 	 * Smart Placement

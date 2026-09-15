@@ -61,7 +61,7 @@ eventsRoutes.use("*", async (c, next) => {
  * 1 チャンク 30 行 = 90 binds に抑える。
  */
 const REPLACE_AVAILABILITY_CHUNK = 30;
-async function replaceAvailabilities(
+export async function replaceAvailabilities(
     d1: D1Database,
     participantId: string,
     statuses: number[]

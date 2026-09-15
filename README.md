@@ -81,6 +81,30 @@ pnpm run deploy
 
 > Note: You need to be logged into Wrangler (`wrangler login`) to deploy.
 
+## MCP Server (AI agent integration)
+
+Every deployment exposes a remote [MCP](https://modelcontextprotocol.io) server at
+`<your-app-url>/api/mcp`, so an AI agent (Claude, etc.) can create events, check
+results, register participants, and perform admin operations (confirm a
+candidate, duplicate an event, export CSV, toggle results visibility) on your
+behalf. It's implemented as a Cloudflare Durable Object (`ChouseiMcpAgent` in
+`src/server/mcp/agent.ts`) and ships in `wrangler.jsonc` — no extra setup beyond
+a normal `pnpm run deploy` (the Durable Object migration is applied
+automatically).
+
+There is no separate authentication layer for MCP: it uses the same trust
+model as the rest of the app — the device-local `userId` for "my events", and
+each event's own admin password for admin operations. Anyone who can reach
+your deployment's HTTP API already has equivalent access, so connecting the
+MCP server does not expose anything new.
+
+To connect from Claude Desktop (or any MCP client), add a remote server
+pointing at `https://<your-app-url>/api/mcp`. A companion Claude Skill that
+teaches Claude how and when to use these tools is included in
+[`skills/chousei-kun/`](skills/chousei-kun/SKILL.md) — copy that directory into
+your own `~/.claude/skills/` (or upload it wherever your client supports
+Skills) alongside connecting the MCP server.
+
 ## Self-hosting checklist
 
 Everything below has a working default or is optional — the app runs without
