@@ -307,7 +307,9 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                         onClick={() => setFocusedDate(date)}
                                         className={cn(
                                             "flex-1 border-r min-w-[72px] sm:min-w-[100px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-12 group/header",
-                                            isFocused ? "bg-primary/10 text-primary" : "bg-background hover:bg-muted/50"
+                                            isFocused ? "bg-primary/10 text-primary" : "bg-background hover:bg-muted/50",
+                                            // 右上の一括○×ボタンと日付が重ならないよう、日付を下に寄せる
+                                            mode === "response" && "pt-5"
                                         )}
                                     >
                                         {mode === "response" ? (
@@ -338,8 +340,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                 </button>
                                             </div>
                                         ) : null}
-                                        <span className="text-xs uppercase leading-none">{format(date, "E", { locale: ja })}</span>
-                                        <span className="text-sm font-bold leading-none mt-0.5">{format(date, "M/d", { locale: ja })}</span>
+                                        <span className="text-sm font-bold leading-none whitespace-nowrap">{format(date, "M/d(E)", { locale: ja })}</span>
                                     </div>
                                 )
                             })}

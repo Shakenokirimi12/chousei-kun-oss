@@ -265,7 +265,7 @@ export function OfficeHourBookingView({ id }: { id: string }) {
     const { officeHour } = data;
     const lastSyncLabel =
         officeHour.lastSyncAt !== null
-            ? new Date(officeHour.lastSyncAt).toLocaleString("ja-JP", { hour: "2-digit", minute: "2-digit", month: "numeric", day: "numeric" })
+            ? new Date(officeHour.lastSyncAt).toLocaleString("ja-JP", { hour: "2-digit", minute: "2-digit", month: "numeric", day: "numeric", weekday: "short" })
             : "未同期";
 
     return (

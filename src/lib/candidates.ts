@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import { CUSTOM_PERIODS } from "@/config/periods";
 
 /**
  * 終日候補: `YYYY-MM-DD_D`。
@@ -32,6 +33,26 @@ export function formatAllDayCandidateLabel(candidate: string): string {
     const date = parseCandidateDate(candidate);
     if (!date) return candidate;
     return format(date, "M/d(E)", { locale: ja });
+}
+
+/**
+ * 候補の短いラベル（曜日付き）: 時限 `7/10(金) 1限` / 時間 `7/10(金) 9:00` / 終日 `7/10(金)`。
+ * 接頭辞の無い旧形式 `YYYY-MM-DD_<n>` は時限として扱う（EventView / ResponseForm と同じ）。
+ * CSV の列見出しや MCP の応答など、サーバー側でも使うので client 専用の
+ * PeriodSelector（HOURLY_SLOTS）には依存しない。
+ */
+export function formatCandidateLabel(candidate: string): string {
+    const date = parseCandidateDate(candidate);
+    if (!date) return candidate;
+    const dateLabel = format(date, "M/d(E)", { locale: ja });
+    const slot = candidate.split("_")[1] ?? "";
+    if (slot.startsWith("H")) {
+        const hour = Number.parseInt(slot.slice(1), 10);
+        return Number.isNaN(hour) ? dateLabel : `${dateLabel} ${hour}:00`;
+    }
+    const periodId = Number.parseInt(slot.startsWith("P") ? slot.slice(1) : slot, 10);
+    const period = CUSTOM_PERIODS.find((p) => p.id === periodId);
+    return period ? `${dateLabel} ${period.label}` : dateLabel;
 }
 
 /** 終日候補の長いラベル: `2026年7月10日(金) 終日` */

@@ -139,7 +139,7 @@ export default function MyEventsPage() {
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">{e.description}</p>
                                     )}
                                     <p className="text-[10px] text-muted-foreground mt-1">
-                                        作成: {format(new Date(e.createdAt), "yyyy/MM/dd HH:mm", { locale: ja })}
+                                        作成: {format(new Date(e.createdAt), "yyyy/MM/dd(E) HH:mm", { locale: ja })}
                                         {e.confirmedCandidateIdx !== null && " ・ 確定済み"}
                                     </p>
                                 </div>

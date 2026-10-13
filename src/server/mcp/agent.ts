@@ -6,7 +6,7 @@ import { createDb, type DbClient } from "@/server/db/client";
 import { events, participants } from "@/server/db/schema";
 import { createPasswordHash, verifyPassword } from "@/lib/admin-auth";
 import { encryptPii } from "@/lib/pii-crypto";
-import { isAllDayEvent } from "@/lib/candidates";
+import { formatCandidateLabel, isAllDayEvent } from "@/lib/candidates";
 import { safeJsonParse } from "@/lib/safe-json";
 import { createEventSchema, participateSchema, confirmCandidateSchema } from "@/server/api/schemas";
 import { replaceAvailabilities } from "@/server/api/routes/events";
@@ -150,7 +150,8 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
             {
                 title: "イベントの詳細・回答状況を取得する",
                 description:
-                    "イベント ID からタイトル・候補日程・確定日程を取得する。回答結果（参加者ごとの出欠）は " +
+                    "イベント ID からタイトル・候補日程・確定日程を取得する。candidateLabels は candidates と同じ順の " +
+                    "曜日付き表示名（例: 10/13(火) 1限）で、利用者に日程を示すときはこちらを使う。回答結果（参加者ごとの出欠）は " +
                     "resultsVisibleToAll が true の場合のみ含まれる。false の場合は adminPassword を渡すと閲覧できる。",
                 inputSchema: {
                     eventId: z.string().uuid(),
@@ -180,11 +181,13 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                     isAdmin = auth.ok;
                 }
 
+                const candidates = safeJsonParse<string[]>(event.candidates, "events.candidates") ?? [];
                 const base = {
                     id: event.id,
                     title: event.title,
                     description: event.description,
-                    candidates: safeJsonParse<string[]>(event.candidates, "events.candidates") ?? [],
+                    candidates,
+                    candidateLabels: candidates.map(formatCandidateLabel),
                     confirmedCandidateIdx: event.confirmedCandidateIdx,
                     url: this.eventUrl(event.id),
                 };
@@ -388,7 +391,7 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                 };
                 const escapeCsv = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
 
-                const header = ["名前", "メール", "コメント", ...candidates.map((_, i) => `候補${i + 1}`)];
+                const header = ["名前", "メール", "コメント", ...candidates.map(formatCandidateLabel)];
                 const lines = [header.map(escapeCsv).join(",")];
                 for (const p of participants) {
                     const cols = [
