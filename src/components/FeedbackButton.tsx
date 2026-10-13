@@ -17,9 +17,16 @@ import { getActivityLogs, clearActivityLogs, formatLogsForEmail } from "@/hooks/
 import { budouxify } from "@/lib/budoux";
 
 // 運用者ごとに変わる連絡先。フォーク/セルフホスト時は環境変数で差し替える。
-const FEEDBACK_EMAIL = process.env.NEXT_PUBLIC_FEEDBACK_EMAIL || "feedback@example.com";
+// 未設定ならボタン自体を出さない。プレースホルダのアドレスを出すと、利用者の
+// フィードバックが届かない宛先に送られてしまう。
+const FEEDBACK_EMAIL = process.env.NEXT_PUBLIC_FEEDBACK_EMAIL;
 
 export function FeedbackButton() {
+    if (!FEEDBACK_EMAIL) return null;
+    return <FeedbackDialog email={FEEDBACK_EMAIL} />;
+}
+
+function FeedbackDialog({ email }: { email: string }) {
     const [isOpen, setIsOpen] = useState(false);
     const [message, setMessage] = useState("");
     const [showLogs, setShowLogs] = useState(false);
@@ -68,7 +75,7 @@ ${logs}
 `
         );
 
-        return `mailto:${FEEDBACK_EMAIL}?subject=${subject}&body=${body}`;
+        return `mailto:${email}?subject=${subject}&body=${body}`;
     };
 
     return (
