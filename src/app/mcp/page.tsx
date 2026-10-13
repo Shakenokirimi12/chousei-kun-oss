@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { siteConfig } from "@/config/site";
 
 export const metadata: Metadata = {
@@ -7,7 +8,10 @@ export const metadata: Metadata = {
     description: `${siteConfig.name}をClaudeなどのAIエージェントから操作するためのMCPサーバーの使い方`,
 };
 
-export const revalidate = 86400;
+// 接続先 URL をリクエストの Host から組み立てるため動的レンダリングにする。
+// ビルド時の環境変数から組み立てると、ビルド環境に値が無いときに存在しない
+// 接続先を案内してしまう。
+export const dynamic = "force-dynamic";
 
 function CodeBlock({ children }: { children: string }) {
     return (
@@ -16,8 +20,6 @@ function CodeBlock({ children }: { children: string }) {
         </pre>
     );
 }
-
-const mcpUrl = `${siteConfig.url}/api/mcp`;
 
 const tools: { name: string; description: string }[] = [
     { name: "create_event", description: "候補日程を指定して、新しい日程調整イベントを作成する" },
@@ -30,7 +32,16 @@ const tools: { name: string; description: string }[] = [
     { name: "admin_update_results_visibility", description: "（管理者操作）回答結果を参加者全員に公開するかどうかを設定する" },
 ];
 
-export default function McpSupportPage() {
+export default async function McpSupportPage() {
+    const h = await headers();
+    // Host だけを使い、X-Forwarded-* は見ない。本番（Cloudflare Workers）はそれらを
+    // 付けないので、訪問者が自分で付けたヘッダーで案内先を書き換えられてしまう。
+    // scheme は本番では常に https。next dev（LAN IP で開いた場合を含む）と、
+    // NODE_ENV=production で動く pnpm preview（localhost）だけ http。
+    const host = h.get("host") ?? "";
+    const isLoopback = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
+    const proto = process.env.NODE_ENV === "development" || isLoopback ? "http" : "https";
+    const mcpUrl = `${proto}://${host}/api/mcp`;
     return (
         <main className="min-h-screen bg-background text-foreground p-6 md:p-10">
             <div className="mx-auto max-w-3xl space-y-8">

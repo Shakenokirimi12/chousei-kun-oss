@@ -117,8 +117,7 @@ any of it configured, just with reduced functionality. Fill in what you need:
 | `TOKEN_ENC_KEY` | Recommended | Encrypts stored Google OAuth tokens at rest |
 | `PII_ENC_KEY` | Recommended | Encrypts participant name/comment/email at rest |
 | `ADMIN_OPS_TOKEN` | Only if you rotate `PII_ENC_KEY` later | Auth for the `/api/admin/backfill-pii` maintenance endpoint |
-| `NEXT_PUBLIC_APP_URL` | Optional | Your deployment's public URL (footer/metadata) |
-| `NEXT_PUBLIC_FEEDBACK_EMAIL` | Optional | Where the in-app "ヘルプ" feedback button sends mail |
+| `NEXT_PUBLIC_FEEDBACK_EMAIL` | Optional | Where the in-app "ヘルプ" feedback button sends mail. Read at build time; the button is hidden if unset |
 | `NEXT_PUBLIC_WANA_DSN` | Optional | Error reporting to your own Sentry-compatible endpoint |
 | `NEXT_PUBLIC_ENABLE_CAMPUS_SQUARE` + `CAMPUS_SQUARE_*` | Optional | Import from a university portal system (see step 2 above) — only relevant if your institution runs a compatible portal |
 | `flagship` binding (wrangler.jsonc) | Optional | Remote maintenance-mode toggle; without it, maintenance mode simply stays off |
