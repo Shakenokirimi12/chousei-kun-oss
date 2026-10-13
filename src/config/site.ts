@@ -1,10 +1,6 @@
 export const siteConfig = {
     name: "調整くん",
     description: "調整くんは、イベントの日程候補を作成し、参加者の出欠を集計して最適な日程を決めるためのスケジュール調整アプリです。",
-    // 各運用者が自分のデプロイ先を NEXT_PUBLIC_APP_URL で設定する。
-    // 未設定時は一般的なプレースホルダーにフォールバック（OSS テンプレートとして特定の
-    // フォーク/運用者のドメインをハードコードしないため）。
-    url: process.env.NEXT_PUBLIC_APP_URL || "https://example.com",
     ui: {
         createEvent: {
             title: "新しい予定表を作成",

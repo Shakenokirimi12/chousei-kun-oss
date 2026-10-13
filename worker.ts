@@ -54,10 +54,14 @@ async function handleMcp(request: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+    // ツール結果に載せるイベント URL の基点。NEXT_PUBLIC_* は next build 時に
+    // インライン化される値で、wrangler がバンドルするこの経路には届かないため、
+    // クライアントが実際に接続してきた origin をそのまま使う。
+    const origin = new URL(request.url).origin;
 
     // McpAgent は ctx.props を Durable Object の this.props として渡す。ctx.props は
     // 読み取り専用なので、メソッドを束縛した別オブジェクトに props を載せて渡す。
-    const props: McpProps = { ip };
+    const props: McpProps = { ip, origin };
     const mcpCtx = {
         waitUntil: ctx.waitUntil.bind(ctx),
         passThroughOnException: ctx.passThroughOnException.bind(ctx),

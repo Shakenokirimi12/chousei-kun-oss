@@ -8,16 +8,11 @@ import { createPasswordHash, verifyPassword } from "@/lib/admin-auth";
 import { encryptPii } from "@/lib/pii-crypto";
 import { isAllDayEvent } from "@/lib/candidates";
 import { safeJsonParse } from "@/lib/safe-json";
-import { siteConfig } from "@/config/site";
 import { createEventSchema, participateSchema, confirmCandidateSchema } from "@/server/api/schemas";
 import { replaceAvailabilities } from "@/server/api/routes/events";
 import type { EventService } from "@/server/services/event.service";
 import { createEventService, createUserService } from "@/server/services";
 import { enforceRateLimit, type RateLimitBinding } from "@/server/api/rate-limit";
-
-function eventUrl(id: string): string {
-    return `${siteConfig.url}/${id}`;
-}
 
 function errorResult(text: string) {
     return { content: [{ type: "text" as const, text }], isError: true as const };
@@ -30,7 +25,7 @@ function jsonResult(data: unknown) {
 const TOO_MANY_ATTEMPTS = "試行回数が多すぎます。しばらくしてから再度お試しください。";
 
 /** worker.ts が ctx.props 経由で渡す、セッション開始時の接続元情報。 */
-export type McpProps = { ip?: string };
+export type McpProps = { ip?: string; origin?: string };
 
 /**
  * 管理者操作用のパスワード検証。ブラウザの admin セッション Cookie に相当するものが
@@ -77,6 +72,16 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
         return this.props?.ip ?? "unknown";
     }
 
+    /**
+     * イベントの URL。接続元の origin（worker.ts が props に載せる）から組み立てる。
+     * origin が無い場合は URL を返さない。プレースホルダのドメインを返すと、
+     * エージェントがそれをそのまま利用者に提示してしまう。
+     */
+    private eventUrl(id: string): string | undefined {
+        const origin = this.props?.origin;
+        return origin ? `${origin}/${id}` : undefined;
+    }
+
     private verifyAdmin(db: DbClient, eventId: string, password: string) {
         return verifyAdminPassword(db, this.env.AUTH_RATE_LIMITER, this.clientIp, eventId, password);
     }
@@ -107,7 +112,7 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                     createdByUserId: creatorUserId ?? null,
                 });
 
-                return jsonResult({ id, url: eventUrl(id) });
+                return jsonResult({ id, url: this.eventUrl(id) });
             }
         );
 
@@ -134,7 +139,7 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
 
                 const items = rows
                     .sort((a, b) => b.createdAt - a.createdAt)
-                    .map((row) => ({ ...row, url: eventUrl(row.id) }));
+                    .map((row) => ({ ...row, url: this.eventUrl(row.id) }));
 
                 return jsonResult({ items });
             }
@@ -181,7 +186,7 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                     description: event.description,
                     candidates: safeJsonParse<string[]>(event.candidates, "events.candidates") ?? [],
                     confirmedCandidateIdx: event.confirmedCandidateIdx,
-                    url: eventUrl(event.id),
+                    url: this.eventUrl(event.id),
                 };
 
                 if (event.resultsVisibleToAll === 0 && !isAdmin) {
@@ -268,7 +273,7 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
 
                 await replaceAvailabilities(this.env.DB, newParticipantId, statuses);
 
-                return jsonResult({ success: true, participantId: newParticipantId, url: eventUrl(eventId) });
+                return jsonResult({ success: true, participantId: newParticipantId, url: this.eventUrl(eventId) });
             }
         );
 
@@ -345,7 +350,7 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                     resultsVisibleToAll: src.resultsVisibleToAll,
                 });
 
-                return jsonResult({ id: newId, url: eventUrl(newId) });
+                return jsonResult({ id: newId, url: this.eventUrl(newId) });
             }
         );
 
