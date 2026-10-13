@@ -673,7 +673,7 @@ export function EventForm() {
                         <DialogTitle>下書きの復元</DialogTitle>
                         <DialogDescription>
                             前回選択した日程のデータが残っています
-                            {draftSavedAt && `（${format(new Date(draftSavedAt), "M月d日 HH:mm", { locale: ja })} 時点）`}
+                            {draftSavedAt && `（${format(new Date(draftSavedAt), "M月d日(E) HH:mm", { locale: ja })} 時点）`}
                             。復元して続きから作成しますか？
                         </DialogDescription>
                     </DialogHeader>

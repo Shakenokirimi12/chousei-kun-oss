@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
+import { format } from "date-fns";
+import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/PeriodSelector";
+import { parseCandidateDate } from "@/lib/candidates";
 import { cn } from "@/lib/utils";
 import { X, Triangle, Circle } from "lucide-react";
 import { budouxify } from "@/lib/budoux";
@@ -37,7 +40,10 @@ export function EventView({ event, participants, availabilities }: EventViewProp
     // Helper to parse candidate string "YYYY-MM-DD_P#" or legacy "YYYY-MM-DD_H#"
     const parseCandidate = (candidate: string) => {
         const [datePart, slotId] = candidate.split("_");
-        const date = new Date(datePart);
+        // new Date("YYYY-MM-DD") は UTC 深夜になり、UTC より西のタイムゾーンでは前日の曜日が出る。
+        const date = parseCandidateDate(candidate);
+        // 形式が崩れた旧データでも表全体を落とさないよう、日付を解釈できなければ元の文字列を出す。
+        const dateLabel = date ? format(date, "M/d(E)", { locale: ja }) : datePart;
 
         let period = null;
         if (slotId.startsWith("P")) {
@@ -52,7 +58,7 @@ export function EventView({ event, participants, availabilities }: EventViewProp
             period = CUSTOM_PERIODS.find(p => p.id === pid);
         }
 
-        return { date, period };
+        return { dateLabel, period };
     };
 
     const statusIcon = (status: number) => {
@@ -101,7 +107,7 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                                 回答者
                             </th>
                             {event.candidates.map((c, idx) => {
-                                const { date, period } = parseCandidate(c);
+                                const { dateLabel, period } = parseCandidate(c);
                                 const highlight = scores[idx] === maxScore && participants.length > 0;
                                 const confirmed = event.confirmedCandidateIdx === idx;
                                 return (
@@ -111,11 +117,8 @@ export function EventView({ event, participants, availabilities }: EventViewProp
                                         highlight && !confirmed ? "bg-primary/5 font-bold text-primary" : ""
                                     )}>
                                         <div className="flex flex-col items-center justify-center h-full py-1">
-                                            <span className="text-xs uppercase text-muted-foreground/70">
-                                                {date.toLocaleDateString('ja-JP', { weekday: 'short' })}
-                                            </span>
-                                            <span className="text-sm font-semibold leading-none my-0.5">
-                                                {date.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+                                            <span className="text-sm font-semibold leading-none my-0.5 whitespace-nowrap">
+                                                {dateLabel}
                                             </span>
                                             <span className="text-xs text-muted-foreground">
                                                 {period?.label}

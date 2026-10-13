@@ -557,8 +557,7 @@ export function PeriodSelector({
                                                         : "bg-background/50 hover:bg-muted/50 text-muted-foreground"
                                                 )}
                                             >
-                                                <span className="text-xs uppercase">{format(date, "E", { locale: ja })}</span>
-                                                <span className={cn("text-sm font-bold", isFocused && "text-primary")}>{format(date, "M/d", { locale: ja })}</span>
+                                                <span className={cn("text-sm font-bold whitespace-nowrap", isFocused && "text-primary")}>{format(date, "M/d(E)", { locale: ja })}</span>
                                                 {!isFocused && viewDates.length > 1 && (
                                                     <span className="text-[9px] text-muted-foreground/70 leading-none mt-0.5">クリックで編集</span>
                                                 )}

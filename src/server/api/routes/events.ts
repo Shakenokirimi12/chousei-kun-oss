@@ -16,7 +16,7 @@ import {
     ownParticipantParamSchema,
     updateResultsVisibilitySchema,
 } from "../schemas";
-import { isAllDayEvent } from "@/lib/candidates";
+import { formatCandidateLabel, isAllDayEvent } from "@/lib/candidates";
 import {
     parseCookieValue,
     refreshGoogleTokenIfNeeded,
@@ -472,7 +472,7 @@ eventsRoutes.post(
 
 /**
  * 管理者: 参加者の回答を CSV としてダウンロード。
- * 列: 名前, メール, コメント, 候補1..N（○ / △ / × / -）
+ * 列: 名前, メール, コメント, 各候補（見出しは `10/13(火) 1限` 形式。値は ○ / △ / × / -）
  */
 eventsRoutes.get(
     "/:id/admin/export.csv",
@@ -523,7 +523,7 @@ eventsRoutes.get(
             return v;
         };
 
-        const header = ["名前", "メール", "コメント", ...candidates.map((_, i) => `候補${i + 1}`)];
+        const header = ["名前", "メール", "コメント", ...candidates.map(formatCandidateLabel)];
         const lines = [header.map(escapeCsv).join(",")];
 
         for (const p of participantRows) {
