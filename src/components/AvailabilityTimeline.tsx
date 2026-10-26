@@ -244,8 +244,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                 </>
                             ) : (
                                 <>
-                                    <span className="md:hidden">候補ブロックごとの回答集計を確認できます</span>
-                                    <span className="hidden md:inline">候補ブロックごとの回答集計（○/△/×）と確定済み候補を確認できます</span>
+                                    <span>○△× の数字を押すと、その回答をした人の名前を見られます</span>
                                 </>
                             )}
                         </>

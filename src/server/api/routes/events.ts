@@ -512,7 +512,7 @@ eventsRoutes.get(
         const statusMap = new Map<string, number>();
         for (const a of availabilityRows) statusMap.set(`${a.participantId}:${a.candidateIdx}`, a.status);
 
-        // status: 0=× / 1=△ / 2=○（EventView と同じ正準マッピング）。未回答は "-"。
+        // status: 0=× / 1=△ / 2=○（ParticipantTable と同じ正準マッピング）。未回答は "-"。
         const symbolFor = (s: number | undefined) => {
             if (s === 0) return "×";
             if (s === 1) return "△";
