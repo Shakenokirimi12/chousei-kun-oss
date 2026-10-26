@@ -440,7 +440,8 @@ export function AdminEventSettings({
                             onChange={setSelectedPeriods}
                         />
                     ) : (
-                        <div className="h-[720px] w-full">
+                        // スマホの PeriodSelector は高さを固定せず縦に流れるので、高さの固定は PC だけにする
+                        <div className="md:h-[720px] w-full">
                             <PeriodSelector
                                 selectedPeriods={selectedPeriods}
                                 onChange={setSelectedPeriods}
