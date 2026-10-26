@@ -8,7 +8,7 @@ import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
 import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
 import { PeriodSelector, CUSTOM_PERIODS } from "@/components/PeriodSelector";
 import { AllDayRangeSelector } from "@/components/AllDayRangeSelector";
-import { isAllDayEvent } from "@/lib/candidates";
+import { formatCandidateLabel, isAllDayEvent } from "@/lib/candidates";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ParticipantComments } from "@/components/ParticipantComments";
 import { CalendarExportDialog } from "@/components/CalendarExportDialog";
@@ -134,6 +134,20 @@ export function AdminEventSettings({
             return startA.localeCompare(startB);
         });
     }, [selectedPeriods]);
+
+    // 確定はサーバーに保存済みの候補配列（initialCandidates）の位置で送る。画面は並べ替え済みの
+    // sortedCandidates で描くので、位置を必ず変換する。変換しないと、保存前の編集が残っているときや
+    // 候補が日付順に保存されていないイベントで、隣の候補が確定されてしまう。
+    const hasUnsavedCandidateChanges = useMemo(() => {
+        const saved = [...initialCandidates].sort();
+        const current = [...selectedPeriods].sort();
+        return saved.length !== current.length || saved.some((c, i) => c !== current[i]);
+    }, [initialCandidates, selectedPeriods]);
+    const confirmedSortedIdx = useMemo(() => {
+        if (confirmedCandidateIdx === null) return null;
+        const idx = sortedCandidates.indexOf(initialCandidates[confirmedCandidateIdx]);
+        return idx === -1 ? null : idx;
+    }, [confirmedCandidateIdx, initialCandidates, sortedCandidates]);
 
     const candidateStats = useMemo(() => {
         const stats = sortedCandidates.map(() => ({ ok: 0, maybe: 0, ng: 0 }));
@@ -293,7 +307,12 @@ export function AdminEventSettings({
         await performConfirmCandidate(null);
     };
 
-    const performConfirmCandidate = async (idx: number | null) => {
+    const performConfirmCandidate = async (sortedIdx: number | null) => {
+        const idx = sortedIdx === null ? null : initialCandidates.indexOf(sortedCandidates[sortedIdx]);
+        if (idx === -1 || (idx !== null && hasUnsavedCandidateChanges)) {
+            setError("候補日程の変更が保存されていません。「予定の編集」タブで「予定編集を保存」してから確定してください。");
+            return;
+        }
         logActivity("日程確定開始", idx !== null ? `候補インデックス: ${idx}` : "確定解除");
         setError("");
         setIsConfirming(true);
@@ -517,13 +536,18 @@ export function AdminEventSettings({
                 </TabsContent>
 
                 <TabsContent value="confirm" className="space-y-3">
-                    {confirmedCandidateIdx !== null && sortedCandidates[confirmedCandidateIdx] && (
+                    {hasUnsavedCandidateChanges ? (
+                        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                            候補日程の変更が保存されていません。確定する前に「予定の編集」タブで保存してください。
+                        </p>
+                    ) : null}
+                    {confirmedCandidateIdx !== null && initialCandidates[confirmedCandidateIdx] && (
                         <div className="space-y-2">
                             <ConfirmedScheduleCard
                                 eventId={eventId}
                                 eventTitle={title}
                                 eventDescription={description}
-                                confirmedCandidate={sortedCandidates[confirmedCandidateIdx]}
+                                confirmedCandidate={initialCandidates[confirmedCandidateIdx]}
                             />
                             <Button
                                 type="button"
@@ -562,7 +586,7 @@ export function AdminEventSettings({
                             onStatusChange={() => { }}
                             okCounts={okCounts}
                             mode="admin"
-                            confirmedCandidateIdx={confirmedCandidateIdx}
+                            confirmedCandidateIdx={confirmedSortedIdx}
                             candidateStats={candidateStats}
                             candidateParticipants={candidateParticipants}
                             onConfirmCandidate={isConfirming ? undefined : confirmCandidate}
@@ -574,7 +598,7 @@ export function AdminEventSettings({
                             onStatusChange={() => { }}
                             okCounts={okCounts}
                             mode="admin"
-                            confirmedCandidateIdx={confirmedCandidateIdx}
+                            confirmedCandidateIdx={confirmedSortedIdx}
                             candidateStats={candidateStats}
                             candidateParticipants={candidateParticipants}
                             onConfirmCandidate={isConfirming ? undefined : confirmCandidate}
@@ -617,7 +641,7 @@ export function AdminEventSettings({
                     onOpenChange={setShowCalendarExportDialog}
                     eventTitle={title}
                     eventDescription={description}
-                    confirmedCandidate={sortedCandidates[pendingConfirmedIdx] ?? ""}
+                    confirmedCandidate={initialCandidates[pendingConfirmedIdx] ?? ""}
                     hasGoogleSession={hasGoogleSession}
                     onAddToGoogleCalendar={addToGoogleCalendar}
                 />
@@ -628,7 +652,11 @@ export function AdminEventSettings({
                 onOpenChange={(open) => {
                     if (!open) setPendingCandidateConfirmIdx(null);
                 }}
-                title="この日程で確定しますか？"
+                title={
+                    pendingCandidateConfirmIdx !== null && sortedCandidates[pendingCandidateConfirmIdx]
+                        ? `${formatCandidateLabel(sortedCandidates[pendingCandidateConfirmIdx])} で確定しますか？`
+                        : "この日程で確定しますか？"
+                }
                 description="確定すると参加者の結果ページに表示されます。この操作自体は招待メールを送信しません（送信するかどうかは次の画面で選べます）。後から「未確定に戻す」で取り消せます。"
                 confirmText="確定する"
                 destructive={false}

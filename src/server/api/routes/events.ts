@@ -197,7 +197,8 @@ eventsRoutes.get("/:id", sValidator("param", eventIdParamSchema), async (c) => {
 });
 
 // 参加者自身の編集用に、自分のレコードのみ返す（イベント所属を検証）。
-// participantId を知っている本人のみが取得できるため、一覧での PII 一括露出を避ける。
+// participantId は公開の GET /:id でも返っていて秘密ではないので、通知用メールアドレスそのものは返さない。
+// 返すと、結果を見られる人なら誰でも全参加者のアドレスを集められてしまう。
 eventsRoutes.get(
     "/:id/participant/:participantId",
     sValidator("param", ownParticipantParamSchema),
@@ -221,7 +222,7 @@ eventsRoutes.get(
             name: (await decryptPii(row.name)) ?? "",
             comment: await decryptPii(row.comment),
             notifyOnFinalize: row.notifyOnFinalize,
-            notificationEmail: await decryptPii(row.notificationEmail),
+            hasNotificationEmail: !!row.notificationEmail,
         });
     }
 );
@@ -239,14 +240,13 @@ eventsRoutes.post(
         }
         const db = createDb(c.env.DB);
         const { name, comment, availabilities: statuses, participantId, userId, notifyOnFinalize, notificationEmail } = c.req.valid("json");
-        const cookieHeader = c.req.header("cookie") ?? "";
-        const googleSessionId = parseCookieValue(cookieHeader, "chousei_google_session");
-        const googleSession = googleSessionId ? await refreshGoogleTokenIfNeeded(db, googleSessionId) : null;
-
         const normalizedComment = comment || null;
-        const normalizedNotificationEmail = notificationEmail?.trim() ? notificationEmail.trim() : (googleSession?.email ?? null);
-        const effectiveNotifyOnFinalize = notifyOnFinalize || !!googleSession?.email;
-        if (effectiveNotifyOnFinalize && !normalizedNotificationEmail) {
+        // 通知は本人が明示的に希望したときだけ有効にし、そのときだけメールアドレスを保存する。
+        // Google 連携のアドレスで勝手に有効にすると、本人の知らないうちに主催者へアドレスが渡る。
+        const effectiveNotifyOnFinalize = !!notifyOnFinalize;
+        const normalizedNotificationEmail = effectiveNotifyOnFinalize && notificationEmail?.trim() ? notificationEmail.trim() : null;
+        // 既存回答の更新では、画面にアドレスを返していないので空で届く。そのときは保存済みのアドレスを使う。
+        if (effectiveNotifyOnFinalize && !normalizedNotificationEmail && !participantId) {
             return c.json({ error: "通知を受け取る場合はメールアドレスが必要です" }, 400);
         }
         const newParticipantId = participantId ?? crypto.randomUUID();
@@ -259,10 +259,14 @@ eventsRoutes.post(
         if (participantId) {
             const existing = await db.query.participants.findFirst({
                 where: eq(participants.id, participantId),
-                columns: { eventId: true },
+                columns: { eventId: true, notificationEmail: true },
             });
             if (!existing || existing.eventId !== eventId) {
                 return c.json({ error: "Participant not found" }, 404);
+            }
+            const keepStoredEmail = effectiveNotifyOnFinalize && !normalizedNotificationEmail;
+            if (keepStoredEmail && !existing.notificationEmail) {
+                return c.json({ error: "通知を受け取る場合はメールアドレスが必要です" }, 400);
             }
             await db
                 .update(participants)
@@ -271,7 +275,7 @@ eventsRoutes.post(
                     comment: encComment,
                     userId: userId ?? null,
                     notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0,
-                    notificationEmail: encEmail,
+                    notificationEmail: keepStoredEmail ? existing.notificationEmail : encEmail,
                 })
                 .where(eq(participants.id, participantId));
         } else {

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
 import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
-import { isAllDayEvent as areAllDayCandidates, isAllDayCandidate, parseDateOnly } from "@/lib/candidates";
+import { isAllDayEvent as areAllDayCandidates, isAllDayCandidate, parseDateOnly, UNANSWERED } from "@/lib/candidates";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { X, Triangle, Circle, Loader2 } from "lucide-react";
@@ -54,12 +54,13 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
   const [name, setName] = React.useState("");
   const [comment, setComment] = React.useState("");
   const [notifyOnFinalize, setNotifyOnFinalize] = React.useState(false);
-  const [notificationEmail, setNotificationEmail] = React.useState("");
   const [showAllDayDialog, setShowAllDayDialog] = React.useState(false);
   const [pendingGoogleEvents, setPendingGoogleEvents] = React.useState<RawImportedEvent[]>([]);
   const [pendingAllDayDates, setPendingAllDayDates] = React.useState<string[]>([]);
+  // 未回答(-1)で始める。○で始めると、スマホで画面外にある候補を見ないまま送ったときに
+  // 「全部参加できる」と集計されてしまう。未回答が残っている間は送信できない。
   const [availabilities, setAvailabilities] = React.useState<number[]>(
-    new Array(candidates.length).fill(2), // Default to 'O'
+    new Array(candidates.length).fill(UNANSWERED),
   );
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isCampusImporting, setIsCampusImporting] = React.useState(false);
@@ -222,6 +223,11 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
   }, [allAvailabilities, candidates.length]);
 
   // Bulk actions
+  const unansweredCount = availabilities.filter((s) => s === UNANSWERED).length;
+  const fillUnanswered = (status: number) => {
+    setAvailabilities((prev) => prev.map((s) => (s === UNANSWERED ? status : s)));
+  };
+
   const setAllStatus = (status: number) => {
     setAvailabilities(new Array(candidates.length).fill(status));
   };
@@ -238,25 +244,16 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     });
   };
 
-  // Load existing participant from localStorage
-  React.useEffect(() => {
-    const storedId = localStorage.getItem(`chosei_participant_${eventId}`);
-    if (!storedId) return;
-
-    const existingParticipant = participants.find((p) => p.id === storedId);
-    if (!existingParticipant) {
-      // Stored ID not found in server data (maybe deleted), clear it
-      localStorage.removeItem(`chosei_participant_${eventId}`);
-      return;
-    }
-
-    setParticipantId(storedId);
+  // 既存の回答を編集状態で読み込む。戻り値はアンマウント時に通知設定の取得を打ち切る関数。
+  const loadParticipant = React.useCallback((id: string, existingParticipant: { name: string; comment?: string | null }) => {
+    setParticipantId(id);
     setName(existingParticipant.name);
     setComment(existingParticipant.comment || "");
 
     // Reconstruct availabilities from the (PII-free) availability list
-    const myAvails = allAvailabilities.filter((a) => a.participantId === storedId);
-    const newAvails = new Array(candidates.length).fill(2); // Default to O
+    const myAvails = allAvailabilities.filter((a) => a.participantId === id);
+    // 回答後に追加された候補は未回答として扱う
+    const newAvails = new Array(candidates.length).fill(UNANSWERED);
     myAvails.forEach((a) => {
       if (a.candidateIdx < newAvails.length) {
         newAvails[a.candidateIdx] = a.status;
@@ -268,18 +265,41 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/events/${eventId}/participant/${storedId}`);
+        const res = await fetch(`/api/events/${eventId}/participant/${id}`);
         if (!res.ok || cancelled) return;
-        const own = (await res.json()) as { notifyOnFinalize?: number; notificationEmail?: string | null };
+        const own = (await res.json()) as { notifyOnFinalize?: number };
         if (cancelled) return;
+        // アドレス自体は返ってこない。通知を続ける場合、サーバーは保存済みのアドレスを使う。
         setNotifyOnFinalize((own.notifyOnFinalize ?? 0) === 1);
-        setNotificationEmail(own.notificationEmail || "");
       } catch {
         // 通知設定の取得失敗は致命的ではない（既定値のまま）。
       }
     })();
     return () => { cancelled = true; };
-  }, [eventId, participants, allAvailabilities, candidates.length]);
+  }, [eventId, allAvailabilities, candidates.length]);
+
+  // Load existing participant from localStorage
+  React.useEffect(() => {
+    const storedId = localStorage.getItem(`chosei_participant_${eventId}`);
+    if (!storedId) return;
+
+    const existingParticipant = participants.find((p) => p.id === storedId);
+    if (!existingParticipant) {
+      // Stored ID not found in server data (maybe deleted), clear it
+      localStorage.removeItem(`chosei_participant_${eventId}`);
+      return;
+    }
+    return loadParticipant(storedId, existingParticipant);
+  }, [eventId, participants, loadParticipant]);
+
+  // 別の端末やブラウザから回答し直すと localStorage に手がかりが無く、新しい回答が増えてしまう。
+  // 入力した名前が既存の回答と一致したら、その回答を編集できるよう案内する。
+  const sameNameParticipant = React.useMemo(() => {
+    if (participantId) return null;
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    return participants.find((p) => p.name.trim() === trimmed) ?? null;
+  }, [participantId, name, participants]);
 
   // Helper to parse candidate string "YYYY-MM-DD_P#" or legacy "YYYY-MM-DD_H#"
   const parseCandidate = React.useCallback((candidate: string) => {
@@ -468,7 +488,6 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         events: RawImportedEvent[];
       };
       const events = (googleData.events || []).filter((ev) => !isExcludedCalendarEvent(ev));
-      const detectedEmail = googleData.email || "";
 
       // Populate busy events for display
       const newEvents = events.map(ev => ({
@@ -488,11 +507,6 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         });
         return next;
       });
-
-      if (detectedEmail) {
-        setNotificationEmail(detectedEmail);
-        setNotifyOnFinalize(true);
-      }
 
       const allDayEvents = events.filter((ev) => isAllDayEvent(ev) && hasAllDayOverlapWithCandidates(ev));
       if (allDayEvents.length > 0) {
@@ -533,27 +547,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
 
   const handleSubmit = async () => {
     const trimmedName = name.trim();
-    const trimmedEmail = notificationEmail.trim();
     const isEditing = Boolean(participantId);
-    if (!trimmedName) return;
-
-    // メール通知を希望する場合のクライアント側バリデーション
-    if (notifyOnFinalize && !trimmedEmail) {
-      setFeedback({
-        title: "メールアドレスが必要です",
-        message: "通知を受け取るにはメールアドレスを入力してください。",
-        isOpen: true,
-      });
-      return;
-    }
-    if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setFeedback({
-        title: "メールアドレスの形式が正しくありません",
-        message: "正しい形式のメールアドレスを入力してください。",
-        isOpen: true,
-      });
-      return;
-    }
+    if (!trimmedName || unansweredCount > 0) return;
 
     logActivity(isEditing ? "回答更新開始" : "回答送信開始", `イベント: ${eventId}`);
     setIsSubmitting(true);
@@ -567,8 +562,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
           availabilities,
           participantId: participantId || undefined,
           userId: userId || undefined,
+          // 通知の設定とアドレスの入力は回答完了画面で行う。ここでは既存の設定を引き継ぐだけ。
           notifyOnFinalize: notifyOnFinalize,
-          notificationEmail: trimmedEmail,
         }),
       });
 
@@ -622,8 +617,23 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         <div className="space-y-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-5">
             <div className="space-y-1.5">
-              <label htmlFor="participant-name" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">お名前</label>
+              <label htmlFor="participant-name" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">お名前 <span className="text-xs font-normal text-red-600">必須</span></label>
               <Input id="participant-name" placeholder="名前を入力してください" value={name} onChange={(e) => setName(e.target.value)} required aria-required="true" maxLength={100} className="bg-background/50 backdrop-blur-sm" />
+              {sameNameParticipant ? (
+                <p className="text-sm text-muted-foreground">
+                  「{sameNameParticipant.name}」さんの回答がすでにあります。
+                  <button
+                    type="button"
+                    className="ml-1 font-medium text-primary underline underline-offset-2"
+                    onClick={() => {
+                      localStorage.setItem(`chosei_participant_${eventId}`, sameNameParticipant.id);
+                      loadParticipant(sameNameParticipant.id, sameNameParticipant);
+                    }}
+                  >
+                    その回答を編集する
+                  </button>
+                </p>
+              ) : null}
             </div>
             <div className="space-y-1.5">
               <label htmlFor="participant-comment" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">コメント (任意)</label>
@@ -651,6 +661,17 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
               <Button variant="outline" size="sm" type="button" onClick={() => setAllStatus(0)} className="bg-red-500/5 hover:bg-red-500/10 text-red-600 border-red-200">
                 <X className="w-3 h-3 mr-1" /> 全て×にする
               </Button>
+              {/* 予定の取り込みで×が入った後など、一部だけ回答済みのときに残りをまとめて埋める */}
+              {unansweredCount > 0 && unansweredCount < candidates.length ? (
+                <>
+                  <Button variant="outline" size="sm" type="button" onClick={() => fillUnanswered(2)}>
+                    <Circle className="w-3 h-3 mr-1" /> 未回答を○にする
+                  </Button>
+                  <Button variant="outline" size="sm" type="button" onClick={() => fillUnanswered(0)}>
+                    <X className="w-3 h-3 mr-1" /> 未回答を×にする
+                  </Button>
+                </>
+              ) : null}
             </div>
             {isDailyEvent ? (
               <DailyAvailabilityList
@@ -683,8 +704,13 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
             </div>
           </div>
 
-          <div className="pt-4 flex justify-end">
-            <Button className="shadow-lg shadow-primary/20 min-w-40" size="lg" onClick={handleSubmit} disabled={!name.trim() || isSubmitting}>
+          <div className="pt-4 flex flex-col items-end gap-2">
+            {!name.trim() || unansweredCount > 0 ? (
+              <p className="text-sm text-muted-foreground text-right" role="status">
+                {!name.trim() ? "お名前を入力すると送信できます。" : `未回答の候補が ${unansweredCount} 件あります。すべてに○△×を付けると送信できます。`}
+              </p>
+            ) : null}
+            <Button className="shadow-lg shadow-primary/20 min-w-40" size="lg" onClick={handleSubmit} disabled={!name.trim() || unansweredCount > 0 || isSubmitting}>
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {participantId ? "回答を更新" : "回答を送信"}
             </Button>

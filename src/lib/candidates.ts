@@ -2,6 +2,9 @@ import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS } from "@/config/periods";
 
+/** 回答画面でまだ○△×を選んでいない候補。サーバーには送らない（0〜2 のみ受け付ける）。 */
+export const UNANSWERED = -1;
+
 /**
  * 終日候補: `YYYY-MM-DD_D`。
  * 時限 `YYYY-MM-DD_P<n>` / 時間 `YYYY-MM-DD_H<n>` と同じ配列に混在させることは

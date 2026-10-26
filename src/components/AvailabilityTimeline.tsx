@@ -8,6 +8,7 @@ import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { UNANSWERED } from "@/lib/candidates";
 
 interface AvailabilityTimelineProps {
     candidates: string[];
@@ -27,6 +28,9 @@ const parseTimeToMinutes = (timeStr: string) => {
     const [h, m] = timeStr.trim().split(":").map(Number);
     return h * 60 + m;
 };
+
+// タップで切り替える順番。未回答からは○に進む。
+const nextStatus = (status: number) => (status === 2 ? 1 : status === 1 ? 0 : 2);
 
 // タイムラインに余白として確保する前後の時間（分）
 const RANGE_PADDING_MIN = 60;
@@ -195,6 +199,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 
     const renderStatusIcon = useCallback((status: number) => {
         switch (status) {
+            case UNANSWERED: return <span className="text-[10px] font-bold text-muted-foreground">未回答</span>;
             case 0: return <X className="w-4 h-4 text-red-500" />;
             case 1: return <Triangle className="w-4 h-4 text-yellow-500" />;
             case 2: return <Circle className="w-4 h-4 text-green-500" />;
@@ -413,7 +418,9 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                 ? "bg-green-500/10 border-green-500/50"
                                                                 : status === 1
                                                                     ? "bg-yellow-500/10 border-yellow-500/50"
-                                                                    : "bg-red-500/10 border-red-500/50",
+                                                                    : status === 0
+                                                                        ? "bg-red-500/10 border-red-500/50"
+                                                                        : "bg-background border-dashed border-muted-foreground/50",
                                                         confirmedCandidateIdx === idx ? "ring-2 ring-emerald-600 border-emerald-500" : "",
                                                         (mode === "admin" || mode === "results") &&
                                                             confirmedCandidateIdx !== idx &&
@@ -431,11 +438,11 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                             tabIndex={0}
                                                             aria-label={`${info.label} の出欠を切り替え`}
                                                             className="md:hidden absolute inset-0 z-30 cursor-pointer"
-                                                            onClick={() => onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2)}
+                                                            onClick={() => onStatusChange(idx, nextStatus(status))}
                                                             onKeyDown={(e) => {
                                                                 if (e.key === "Enter" || e.key === " ") {
                                                                     e.preventDefault();
-                                                                    onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2);
+                                                                    onStatusChange(idx, nextStatus(status));
                                                                 }
                                                             }}
                                                         />
