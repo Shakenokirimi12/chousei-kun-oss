@@ -10,15 +10,15 @@ type Props = {
 export function AdminSessionActions({ eventId }: Props) {
     const router = useRouter();
 
-    const relogin = async () => {
+    const logout = async () => {
         await fetch(`/api/events/${eventId}/admin-logout`, { method: "POST" });
         router.replace(`/${eventId}/admin/login`);
         router.refresh();
     };
 
     return (
-        <Button type="button" variant="outline" onClick={relogin}>
-            再ログイン
+        <Button type="button" variant="outline" onClick={logout}>
+            管理画面からログアウト
         </Button>
     );
 }

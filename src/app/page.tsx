@@ -48,7 +48,7 @@ export default function LandingPage() {
 						<div className="pt-4 flex flex-col sm:flex-row gap-3 justify-center items-stretch sm:items-center">
 							<Link href="/create" className="w-full sm:w-auto">
 								<Button size="lg" className="text-lg px-8 py-6 gap-2 w-full sm:w-auto">
-									予定調整を始める
+									イベントを作成する
 									<ArrowRight className="h-5 w-5" aria-hidden="true" />
 								</Button>
 							</Link>

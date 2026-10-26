@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 
@@ -85,9 +85,18 @@ export default function MyEventsPage() {
                 </Link>
             </header>
 
-            <div className="rounded-md border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
-                この一覧は「この端末のこのブラウザ」に保存された情報だけを頼りに表示しています。アカウント登録はしていないため、別の端末・別のブラウザや、ブラウザのデータ（Cookie・サイトデータ）を消すと一覧から消えます（イベント自体は削除されません）。
-                「管理」を開く際は、この一覧に載っていても引き続き管理者パスワードの入力が必要です。
+            <div
+                role="note"
+                className="flex gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100"
+            >
+                <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" aria-hidden="true" />
+                <div className="space-y-1">
+                    <p className="font-semibold">この一覧は、この端末のこのブラウザにしか残りません</p>
+                    <p>
+                        別の端末やブラウザでは表示されません。ブラウザのデータ（Cookie・サイトデータ）を消すと一覧も消えます。イベント自体は消えないので、管理用 URL は控えておいてください。
+                    </p>
+                    <p>一覧から「管理」を開くときも、管理者パスワードの入力が必要です。</p>
+                </div>
             </div>
 
             {hasUserId === false && (
@@ -95,7 +104,7 @@ export default function MyEventsPage() {
                     まだこの端末でイベントは作成されていません。
                     <div className="mt-3">
                         <Link href="/create">
-                            <Button>新しい予定表を作成</Button>
+                            <Button>新しいイベントを作成</Button>
                         </Link>
                     </div>
                 </div>
@@ -110,9 +119,14 @@ export default function MyEventsPage() {
             {error && <p className="text-sm text-destructive">{error}</p>}
 
             {items && items.length === 0 && (
-                <p className="text-sm text-muted-foreground py-12 text-center">
+                <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
                     まだ作成されたイベントはありません。
-                </p>
+                    <div className="mt-3">
+                        <Link href="/create">
+                            <Button>新しいイベントを作成</Button>
+                        </Link>
+                    </div>
+                </div>
             )}
 
             {appImportUid && items && items.length > 0 && (

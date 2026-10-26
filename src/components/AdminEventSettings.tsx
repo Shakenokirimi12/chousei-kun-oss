@@ -509,7 +509,7 @@ export function AdminEventSettings({
                                                 </span>
                                             </th>
                                             <th className="text-center px-3 py-2 font-medium text-amber-500">
-                                                <span className="inline-flex items-center gap-1" aria-label="未定／調整可">
+                                                <span className="inline-flex items-center gap-1" aria-label="未定">
                                                     <CircleAlert className="h-4 w-4" aria-hidden="true" />△
                                                 </span>
                                             </th>

@@ -323,7 +323,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                     }}
                                                     className="w-9 h-8 rounded-md border border-red-400/60 bg-red-100 text-red-600 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center cursor-pointer dark:bg-red-950/40 dark:text-red-400"
                                                     title="この日のすべてを×にする"
-                                                    aria-label="この日のすべてを不参加(×)にする"
+                                                    aria-label="この日のすべてを参加不可(×)にする"
                                                 >
                                                     <X className="w-4 h-4" />
                                                 </button>
@@ -550,8 +550,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
                                                                         status === 1 ? "bg-yellow-500 text-white shadow-inner" : "hover:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
                                                                     )}
-                                                                    title="調整中"
-                                                                    aria-label="調整中(△)"
+                                                                    title="未定"
+                                                                    aria-label="未定(△)"
                                                                     aria-pressed={status === 1}
                                                                 >
                                                                     <Triangle className="w-3 h-3" />
@@ -562,8 +562,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
                                                                         status === 0 ? "bg-red-500 text-white shadow-inner" : "hover:bg-red-500/20 text-red-600 dark:text-red-400"
                                                                     )}
-                                                                    title="不参加"
-                                                                    aria-label="不参加(×)"
+                                                                    title="参加不可"
+                                                                    aria-label="参加不可(×)"
                                                                     aria-pressed={status === 0}
                                                                 >
                                                                     <X className="w-3 h-3" />

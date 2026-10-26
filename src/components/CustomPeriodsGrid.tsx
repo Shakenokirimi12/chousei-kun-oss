@@ -14,7 +14,7 @@ interface CustomPeriodsGridProps {
 export default function CustomPeriodsGrid({ groupedDates, selectedPeriods, togglePeriod, busyPeriodIds }: CustomPeriodsGridProps) {
     return (
         <div className="mb-4">
-            <h4 className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-tight">カスタム枠設定</h4>
+            <h4 className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-tight">時限で選ぶ</h4>
             <div className="grid grid-cols-3 md:grid-cols-4 gap-1">
                 {CUSTOM_PERIODS.map((p: CustomPeriod) => {
                     // Extract the date from the first key in groupedDates (which is passed down)
