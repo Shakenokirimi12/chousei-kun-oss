@@ -53,7 +53,6 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
   const { userId } = useUser();
   const [name, setName] = React.useState("");
   const [comment, setComment] = React.useState("");
-  const [notifyOnFinalize, setNotifyOnFinalize] = React.useState(false);
   const [showAllDayDialog, setShowAllDayDialog] = React.useState(false);
   const [pendingGoogleEvents, setPendingGoogleEvents] = React.useState<RawImportedEvent[]>([]);
   const [pendingAllDayDates, setPendingAllDayDates] = React.useState<string[]>([]);
@@ -244,7 +243,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     });
   };
 
-  // 既存の回答を編集状態で読み込む。戻り値はアンマウント時に通知設定の取得を打ち切る関数。
+  // 既存の回答を編集状態で読み込む。通知設定は完了画面で扱うので、ここでは読まない。
   const loadParticipant = React.useCallback((id: string, existingParticipant: { name: string; comment?: string | null }) => {
     setParticipantId(id);
     setName(existingParticipant.name);
@@ -260,23 +259,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
       }
     });
     setAvailabilities(newAvails);
-
-    // Fetch the participant's OWN notification settings (not exposed in the public list).
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/events/${eventId}/participant/${id}`);
-        if (!res.ok || cancelled) return;
-        const own = (await res.json()) as { notifyOnFinalize?: number };
-        if (cancelled) return;
-        // アドレス自体は返ってこない。通知を続ける場合、サーバーは保存済みのアドレスを使う。
-        setNotifyOnFinalize((own.notifyOnFinalize ?? 0) === 1);
-      } catch {
-        // 通知設定の取得失敗は致命的ではない（既定値のまま）。
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [eventId, allAvailabilities, candidates.length]);
+  }, [allAvailabilities, candidates.length]);
 
   // Load existing participant from localStorage
   React.useEffect(() => {
@@ -289,11 +272,12 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
       localStorage.removeItem(`chosei_participant_${eventId}`);
       return;
     }
-    return loadParticipant(storedId, existingParticipant);
+    loadParticipant(storedId, existingParticipant);
   }, [eventId, participants, loadParticipant]);
 
   // 別の端末やブラウザから回答し直すと localStorage に手がかりが無く、新しい回答が増えてしまう。
-  // 入力した名前が既存の回答と一致したら、その回答を編集できるよう案内する。
+  // 入力した名前が既存の回答と一致したら注意を出す。名前の一致だけで編集を許すと、
+  // 名字が重なった別人の回答や通知先を書き換えられてしまうので、編集の入口にはしない。
   const sameNameParticipant = React.useMemo(() => {
     if (participantId) return null;
     const trimmed = name.trim();
@@ -562,8 +546,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
           availabilities,
           participantId: participantId || undefined,
           userId: userId || undefined,
-          // 通知の設定とアドレスの入力は回答完了画面で行う。ここでは既存の設定を引き継ぐだけ。
-          notifyOnFinalize: notifyOnFinalize,
+          // 通知の設定は回答完了画面で行う。省略すると、更新時は保存済みの設定がそのまま残る。
         }),
       });
 
@@ -620,18 +603,8 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
               <label htmlFor="participant-name" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">お名前 <span className="text-xs font-normal text-red-600">必須</span></label>
               <Input id="participant-name" placeholder="名前を入力してください" value={name} onChange={(e) => setName(e.target.value)} required aria-required="true" maxLength={100} className="bg-background/50 backdrop-blur-sm" />
               {sameNameParticipant ? (
-                <p className="text-sm text-muted-foreground">
-                  「{sameNameParticipant.name}」さんの回答がすでにあります。
-                  <button
-                    type="button"
-                    className="ml-1 font-medium text-primary underline underline-offset-2"
-                    onClick={() => {
-                      localStorage.setItem(`chosei_participant_${eventId}`, sameNameParticipant.id);
-                      loadParticipant(sameNameParticipant.id, sameNameParticipant);
-                    }}
-                  >
-                    その回答を編集する
-                  </button>
+                <p className="text-sm text-amber-700 dark:text-amber-400" role="status">
+                  「{sameNameParticipant.name}」さんの回答がすでにあります。自分の回答を直すときは、前に回答した端末とブラウザでこのページを開いてください。別の人なら、区別できる名前にしてください。
                 </p>
               ) : null}
             </div>

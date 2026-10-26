@@ -245,8 +245,7 @@ eventsRoutes.post(
         // Google 連携のアドレスで勝手に有効にすると、本人の知らないうちに主催者へアドレスが渡る。
         const effectiveNotifyOnFinalize = !!notifyOnFinalize;
         const normalizedNotificationEmail = effectiveNotifyOnFinalize && notificationEmail?.trim() ? notificationEmail.trim() : null;
-        // 既存回答の更新では、画面にアドレスを返していないので空で届く。そのときは保存済みのアドレスを使う。
-        if (effectiveNotifyOnFinalize && !normalizedNotificationEmail && !participantId) {
+        if (effectiveNotifyOnFinalize && !normalizedNotificationEmail) {
             return c.json({ error: "通知を受け取る場合はメールアドレスが必要です" }, 400);
         }
         const newParticipantId = participantId ?? crypto.randomUUID();
@@ -259,23 +258,22 @@ eventsRoutes.post(
         if (participantId) {
             const existing = await db.query.participants.findFirst({
                 where: eq(participants.id, participantId),
-                columns: { eventId: true, notificationEmail: true },
+                columns: { eventId: true },
             });
             if (!existing || existing.eventId !== eventId) {
                 return c.json({ error: "Participant not found" }, 404);
             }
-            const keepStoredEmail = effectiveNotifyOnFinalize && !normalizedNotificationEmail;
-            if (keepStoredEmail && !existing.notificationEmail) {
-                return c.json({ error: "通知を受け取る場合はメールアドレスが必要です" }, 400);
-            }
+            // 回答画面は通知設定を扱わない（設定は完了画面の /notification で行う）ので、
+            // notifyOnFinalize を省略した更新では保存済みの通知設定とアドレスに触れない。
             await db
                 .update(participants)
                 .set({
                     name: encName,
                     comment: encComment,
                     userId: userId ?? null,
-                    notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0,
-                    notificationEmail: keepStoredEmail ? existing.notificationEmail : encEmail,
+                    ...(notifyOnFinalize === undefined
+                        ? {}
+                        : { notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0, notificationEmail: encEmail }),
                 })
                 .where(eq(participants.id, participantId));
         } else {
@@ -585,6 +583,7 @@ eventsRoutes.patch(
             columns: {
                 id: true,
                 candidates: true,
+                confirmedCandidateIdx: true,
             },
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
@@ -636,10 +635,15 @@ eventsRoutes.patch(
                 ).bind(...binds)
             );
         }
+        // 確定済みの候補も回答と同じく付け替える。位置のまま残すと、候補の追加・削除・並べ替えで
+        // 確定先が別の候補にずれる。確定していた候補が消えた場合は未確定に戻す。
+        const confirmedCandidate =
+            currentEvent.confirmedCandidateIdx !== null ? oldCandidates[currentEvent.confirmedCandidateIdx] : undefined;
+        const nextConfirmedIdx = confirmedCandidate !== undefined ? (indexMap.get(confirmedCandidate) ?? null) : null;
         statements.push(
             c.env.DB.prepare(
-                `UPDATE events SET title = ?, description = ?, candidates = ? WHERE id = ?`
-            ).bind(title, description || null, JSON.stringify(nextCandidates), id)
+                `UPDATE events SET title = ?, description = ?, candidates = ?, confirmed_candidate_idx = ? WHERE id = ?`
+            ).bind(title, description || null, JSON.stringify(nextCandidates), nextConfirmedIdx, id)
         );
         await c.env.DB.batch(statements);
 

@@ -44,6 +44,10 @@ export function AdminEventSettings({
     const [description, setDescription] = useState(initialDescription);
     const [selectedPeriods, setSelectedPeriods] = useState(initialCandidates);
     const [confirmedCandidateIdx, setConfirmedCandidateIdx] = useState<number | null>(initialConfirmedCandidateIdx);
+    // 候補を保存するとサーバーが確定先の位置を付け替えるので、再取得した値に合わせる
+    useEffect(() => {
+        setConfirmedCandidateIdx(initialConfirmedCandidateIdx);
+    }, [initialConfirmedCandidateIdx]);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isConfirming, setIsConfirming] = useState(false);
     const [submitComplete, setSubmitComplete] = useState(false);
