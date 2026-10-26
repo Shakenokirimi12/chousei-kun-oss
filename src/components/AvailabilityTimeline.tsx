@@ -3,7 +3,7 @@
 import { memo, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Triangle, Circle, ZoomIn, ZoomOut } from "lucide-react";
+import { X, Triangle, Circle, CircleDashed, ZoomIn, ZoomOut } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
@@ -179,7 +179,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 
     const renderStatusIcon = useCallback((status: number) => {
         switch (status) {
-            case UNANSWERED: return <span className="text-[10px] font-bold text-muted-foreground">未回答</span>;
+            // 狭いブロックの右上に文字を置くと時刻表示に重なるので、他の記号と同じ大きさのアイコンにする
+            case UNANSWERED: return <CircleDashed className="w-4 h-4 text-muted-foreground" aria-label="未回答" />;
             case 0: return <X className="w-4 h-4 text-red-500" />;
             case 1: return <Triangle className="w-4 h-4 text-yellow-500" />;
             case 2: return <Circle className="w-4 h-4 text-green-500" />;
