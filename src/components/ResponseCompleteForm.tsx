@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { BellOff, Calendar, Loader2, Check, Copy, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
 import { useUser } from "@/hooks/useUser";
 import { logActivity } from "@/hooks/useActivityLog";
+import { useCopy } from "@/hooks/useCopy";
 
 type Props = {
     eventId: string;
@@ -25,8 +26,8 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
     const [isSaving, setIsSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-    const [copiedEvent, setCopiedEvent] = useState(false);
-    const [copiedAll, setCopiedAll] = useState(false);
+    const eventIcalCopy = useCopy();
+    const allIcalCopy = useCopy();
     const [isRegenerating, setIsRegenerating] = useState(false);
 
     const trimmedNotificationEmail = notificationEmail.trim();
@@ -359,16 +360,12 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                                             variant="outline"
                                             size="sm"
                                             onClick={() => {
-                                                if (allEventsIcalUrl) {
-                                                    navigator.clipboard.writeText(allEventsIcalUrl);
-                                                    setCopiedAll(true);
-                                                    setTimeout(() => setCopiedAll(false), 2000);
-                                                }
+                                                if (allEventsIcalUrl) void allIcalCopy.copy(allEventsIcalUrl);
                                             }}
                                             className="gap-2"
                                         >
-                                            {copiedAll ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                            {copiedAll ? "コピーしました" : "URLをコピー"}
+                                            {allIcalCopy.copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                            {allIcalCopy.copied ? "コピーしました" : allIcalCopy.error ? "コピーできませんでした" : "購読用 URL をコピー"}
                                         </Button>
                                     </div>
 
@@ -423,18 +420,16 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                                     variant="outline"
                                     size="sm"
                                     onClick={() => {
-                                        navigator.clipboard.writeText(eventIcalUrl);
-                                        setCopiedEvent(true);
-                                        setTimeout(() => setCopiedEvent(false), 2000);
+                                        void eventIcalCopy.copy(eventIcalUrl);
                                     }}
                                     className="gap-2"
                                 >
-                                    {copiedEvent ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                    {copiedEvent ? "コピーしました" : "URLをコピー"}
+                                    {eventIcalCopy.copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                    {eventIcalCopy.copied ? "コピーしました" : eventIcalCopy.error ? "コピーできませんでした" : "購読用 URL をコピー"}
                                 </Button>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                「カレンダーに追加」でカレンダーアプリが開きます。URLをコピーして手動で登録することもできます。
+                                「カレンダーに追加」でカレンダーアプリが開きます。購読用 URL をコピーして、カレンダーアプリに手動で登録することもできます。
                             </p>
                         </div>
                     )}

@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { HelpCircle, Trash2, Mail, Copy, Check, ChevronDown, ChevronUp } from "lucide-react";
 import { getActivityLogs, clearActivityLogs, formatLogsForEmail } from "@/hooks/useActivityLog";
 import { budouxify } from "@/lib/budoux";
+import { useCopy } from "@/hooks/useCopy";
 
 // 運用者ごとに変わる連絡先。フォーク/セルフホスト時は環境変数で差し替える。
 // 未設定ならボタン自体を出さない。プレースホルダのアドレスを出すと、利用者の
@@ -31,7 +32,7 @@ function FeedbackDialog({ email }: { email: string }) {
     const [message, setMessage] = useState("");
     const [showLogs, setShowLogs] = useState(false);
     const [logs, setLogs] = useState<string>("");
-    const [copied, setCopied] = useState(false);
+    const logsCopy = useCopy();
 
     useEffect(() => {
         if (isOpen) {
@@ -45,9 +46,7 @@ function FeedbackDialog({ email }: { email: string }) {
     };
 
     const handleCopyLogs = () => {
-        navigator.clipboard.writeText(logs);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        void logsCopy.copy(logs);
     };
 
     const generateMailtoLink = () => {
@@ -142,12 +141,12 @@ ${logs}
                                         onClick={handleCopyLogs}
                                         className="gap-1"
                                     >
-                                        {copied ? (
+                                        {logsCopy.copied ? (
                                             <Check className="h-3 w-3" />
                                         ) : (
                                             <Copy className="h-3 w-3" />
                                         )}
-                                        {copied ? "コピーしました" : "コピー"}
+                                        {logsCopy.copied ? "コピーしました" : logsCopy.error ? "コピーできませんでした" : "コピー"}
                                     </Button>
                                     <Button
                                         type="button"
