@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { Calendar } from "@/components/ui/calendar";
 import { Button } from "@/components/ui/button";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseCandidateDate } from "@/lib/candidates";
 
@@ -190,11 +191,6 @@ export function AllDayRangeSelector({
                             <p className="text-xs text-muted-foreground">
                                 候補にしない日はクリックで除外できます（{selected.length}日選択中）
                             </p>
-                            {chipNotice ? (
-                                <p role="status" className="w-full text-xs font-medium text-red-600 dark:text-red-400">
-                                    {chipNotice}
-                                </p>
-                            ) : null}
                             {chipDays.some((c) => c.date.getDay() === 0 || c.date.getDay() === 6) && (
                                 <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={toggleAllWeekends}>
                                     {hasActiveWeekend ? "土日をまとめて除外" : "土日を候補に戻す"}
@@ -250,6 +246,23 @@ export function AllDayRangeSelector({
                     </div>
                 )}
             </div>
+            {/* 行を差し込むとチップが下にずれ、続けて押した位置が別の日になるので、時限の作成画面と同じく画面下に重ねて出す */}
+            {chipNotice ? (
+                <div
+                    role="status"
+                    className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center gap-3 rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
+                >
+                    <span className="flex-1">{chipNotice}</span>
+                    <button
+                        type="button"
+                        onClick={() => setChipNotice(null)}
+                        className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+                        aria-label="閉じる"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+            ) : null}
         </div>
     );
 }

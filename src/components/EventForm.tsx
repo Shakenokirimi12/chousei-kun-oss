@@ -414,7 +414,9 @@ export function EventForm() {
             let creatorUserId: string | undefined;
             if (typeof window !== "undefined") {
                 creatorUserId = localStorage.getItem("chosei_user_id") || undefined;
-                if (!creatorUserId) {
+                // randomUUID は HTTPS / localhost でしか使えない。LAN の IP で開いた開発環境などでは
+                // マイページへの掲載をあきらめ、作成そのものは止めない
+                if (!creatorUserId && typeof crypto.randomUUID === "function") {
                     creatorUserId = crypto.randomUUID();
                     localStorage.setItem("chosei_user_id", creatorUserId);
                 }
