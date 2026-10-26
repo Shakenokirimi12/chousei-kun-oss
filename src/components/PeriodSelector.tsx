@@ -472,7 +472,7 @@ export function PeriodSelector({
                         <div className="flex items-center gap-2 leading-tight">
                             <Pencil className="w-4 h-4 text-primary shrink-0" />
                             <div className="flex flex-col">
-                                <span className="text-[10px] text-primary/80 font-medium">この日を編集中（右の時間軸をクリックで切替）</span>
+                                <span className="text-xs text-primary/80 font-medium">この日を編集中（右の時間軸をクリックで切替）</span>
                                 <span className="text-base font-bold text-primary">
                                     {format(focusedDate, "M月d日(E)", { locale: ja })}
                                 </span>
@@ -482,7 +482,7 @@ export function PeriodSelector({
                             type="button"
                             variant="ghost"
                             size="sm"
-                            className="h-7 px-2 text-[10px] text-muted-foreground"
+                            className="h-7 px-2 text-xs text-muted-foreground"
                             onClick={clearDayAll}
                             title="この日の選択を全解除"
                         >
@@ -545,7 +545,7 @@ export function PeriodSelector({
                                 >
                                     この範囲を候補に追加
                                 </Button>
-                                <div className="flex items-center justify-between text-[10px]">
+                                <div className="flex items-center justify-between text-xs">
                                     <button
                                         type="button"
                                         onClick={selectDayHourly}
@@ -563,7 +563,7 @@ export function PeriodSelector({
                                 </div>
                                 <div className="flex items-start gap-2 rounded-md bg-muted/50 px-2 py-1.5">
                                     <Info className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground" />
-                                    <p className="text-[10px] text-muted-foreground leading-snug">
+                                    <p className="text-xs text-muted-foreground leading-snug">
                                         24:00 まで選ぶときは、終了を 0:00 にします。
                                     </p>
                                 </div>
@@ -595,7 +595,7 @@ export function PeriodSelector({
 
                             {/* タブ3: 繰り返し */}
                             <TabsContent value="recur" className="mt-0 space-y-2">
-                                <p className="text-[10px] text-muted-foreground leading-snug">
+                                <p className="text-xs text-muted-foreground leading-snug">
                                     この日に選んだ時間帯を、未来の同曜日・同日付に複製します。
                                 </p>
                                 <div className="flex items-center gap-1.5">
@@ -669,7 +669,7 @@ export function PeriodSelector({
                                             >
                                                 <span className={cn("text-sm font-bold whitespace-nowrap", isFocused && "text-primary")}>{format(date, "M/d(E)", { locale: ja })}</span>
                                                 {!isFocused && viewDates.length > 1 && (
-                                                    <span className="text-[9px] text-muted-foreground/70 leading-none mt-0.5">クリックで編集</span>
+                                                    <span className="text-[11px] text-muted-foreground leading-none mt-0.5">クリックで編集</span>
                                                 )}
 
                                                 <Button
@@ -823,7 +823,7 @@ export function PeriodSelector({
                                                         <div className="font-bold flex items-center gap-1">
                                                             {info.label}
                                                             {isConflict && (
-                                                                <span className="text-[9px] font-semibold uppercase tracking-tight bg-red-600 text-white px-1 rounded">重複</span>
+                                                                <span className="text-[10px] font-semibold uppercase tracking-tight bg-red-600 text-white px-1 rounded">重複</span>
                                                             )}
                                                         </div>
                                                     </div>
