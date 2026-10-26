@@ -47,7 +47,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
                     {/* 回答より先に目に入らないよう、スマホでは全幅ボタンにせず控えめなリンクにする */}
                     <Link href={`/${id}/results`} className="self-start shrink-0">
                         <Button variant="ghost" size="sm" className="gap-1 group -ml-3 sm:ml-0 text-muted-foreground">
-                            みんなの回答を見る
+                            結果を確認する
                             <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                         </Button>
                     </Link>

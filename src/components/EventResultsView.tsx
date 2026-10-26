@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 import Link from "next/link";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { isAllDayEvent } from "@/lib/candidates";
 import { ParticipantComments } from "@/components/ParticipantComments";
 import { ParticipantTable } from "@/components/ParticipantTable";
 import { ConfirmedScheduleCard } from "@/components/ConfirmedScheduleCard";
+import { useCopy } from "@/hooks/useCopy";
 
 type Participant = {
     id: string;
@@ -87,16 +88,7 @@ export const EventResultsView = memo(function EventResultsView({
     }, [availabilities, candidates, participantNameById]);
 
     const confirmedCandidate = confirmedCandidateIdx !== null ? candidates[confirmedCandidateIdx] : null;
-    const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-    const copyAnswerUrl = async () => {
-        try {
-            await navigator.clipboard.writeText(`${window.location.origin}/${eventId}`);
-            setCopyState("copied");
-        } catch {
-            setCopyState("failed");
-        }
-        setTimeout(() => setCopyState("idle"), 2000);
-    };
+    const answerUrlCopy = useCopy();
 
     return (
         <div className="space-y-6">
@@ -121,9 +113,9 @@ export const EventResultsView = memo(function EventResultsView({
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => void copyAnswerUrl()}
+                            onClick={() => void answerUrlCopy.copy(`${window.location.origin}/${eventId}`)}
                         >
-                            {copyState === "copied" ? "コピーしました" : copyState === "failed" ? "コピーできませんでした" : "回答用 URL をコピー"}
+                            {answerUrlCopy.copied ? "コピーしました" : answerUrlCopy.error ? "コピーできませんでした" : "回答用 URL をコピー"}
                         </Button>
                         <Link href={`/${eventId}`}>
                             <Button size="sm">自分も回答する</Button>

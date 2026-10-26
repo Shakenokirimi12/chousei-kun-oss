@@ -7,6 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CircleAlert } from "lucide-react";
 
+// FeedbackButton と同じ条件。未設定ならヘルプボタン自体が出ないので、そこへ案内しない
+const HAS_FEEDBACK_CONTACT = !!process.env.NEXT_PUBLIC_FEEDBACK_EMAIL;
+
 export default function AdminLoginPage() {
     const params = useParams<{ id: string }>();
     const router = useRouter();
@@ -95,9 +98,11 @@ export default function AdminLoginPage() {
                             <p>
                                 パスワードが無くても、参加者は回答を続けられます。結果を公開しているイベントなら、「結果確認 URL」から結果も見られます。日程の確定など、管理の操作だけができなくなります。
                             </p>
-                            <p>
-                                心当たりのパスワードを試し尽くした場合は、ページ下部の「ヘルプ・フィードバック」からお問い合わせください。
-                            </p>
+                            {HAS_FEEDBACK_CONTACT ? (
+                                <p>
+                                    心当たりのパスワードを試し尽くした場合は、ページ下部の「ヘルプ・フィードバック」からお問い合わせください。
+                                </p>
+                            ) : null}
                         </div>
                     )}
                 </CardContent>

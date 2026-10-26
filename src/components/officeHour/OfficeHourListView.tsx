@@ -62,7 +62,7 @@ export function OfficeHourListView() {
                     面談や相談の時間枠を公開して、相手に空いている枠を予約してもらう機能です。
                 </p>
                 <p className="text-sm text-muted-foreground">
-                    管理にはGoogleアカウントでのログインが必要です。ここで共有されるのはメールアドレスだけです。
+                    管理にはGoogleアカウントでのログインが必要です。
                 </p>
                 <Button asChild size="lg" className="gap-2">
                     <a href={`/api/google/auth/start?returnTo=${encodeURIComponent("/office-hours")}${userId ? `&userId=${userId}` : ""}`}>

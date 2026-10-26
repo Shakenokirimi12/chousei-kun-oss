@@ -29,7 +29,7 @@ const statusIcon = (status: number | undefined) => {
         case 0: return <X className="w-5 h-5 text-red-500 mx-auto" aria-label="×" />;
         case 1: return <Triangle className="w-5 h-5 text-yellow-500 mx-auto" aria-label="△" />;
         case 2: return <Circle className="w-5 h-5 text-green-500 mx-auto" aria-label="○" />;
-        default: return <span className="text-muted-foreground" aria-label="回答なし">-</span>;
+        default: return <span className="text-muted-foreground"><span aria-hidden="true">-</span><span className="sr-only">回答なし</span></span>;
     }
 };
 
@@ -80,7 +80,7 @@ export const ParticipantTable = memo(function ParticipantTable({ candidates, con
                         {participants.map((p) => (
                             <tr key={p.id} className="border-b last:border-0">
                                 <th scope="row" className="px-3 py-2 text-left font-medium sticky left-0 z-10 bg-card border-r">
-                                    <span className="block max-w-[10rem] truncate">{p.name}</span>
+                                    <span className="block max-w-[10rem] truncate" title={p.name}>{p.name}</span>
                                 </th>
                                 {candidates.map((c, idx) => (
                                     <td

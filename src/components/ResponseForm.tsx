@@ -669,7 +669,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
                 <Circle className="w-3 h-3 text-green-500" /> {isDailyEvent ? "いる" : "参加可能"}
               </div>
               <div className="flex items-center gap-1.5">
-                <Triangle className="w-3 h-3 text-yellow-500" /> {isDailyEvent ? "未定" : "未定"}
+                <Triangle className="w-3 h-3 text-yellow-500" /> 未定
               </div>
               <div className="flex items-center gap-1.5">
                 <X className="w-3 h-3 text-red-500" /> {isDailyEvent ? "いない" : "参加不可"}
