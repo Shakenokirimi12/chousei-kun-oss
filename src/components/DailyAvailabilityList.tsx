@@ -442,7 +442,8 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                                         <span className="text-[9px] bg-sky-100 text-sky-700 px-1 rounded-sm font-bold whitespace-nowrap">推奨</span>
                                                     )}
                                                 </span>
-                                                <div className="grid grid-cols-3 gap-0.5 text-[10px] sm:text-xs">
+                                                {/* スマホのカレンダーは1マスが狭く、横に3つ並べると数字が潰れるので縦に積む */}
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-0.5 text-[11px] sm:text-xs font-bold">
                                                     <button
                                                         type="button"
                                                         className="rounded border border-green-400/50 bg-green-500/20 text-green-700 text-center py-0.5 hover:bg-green-500/35 transition-colors cursor-pointer tabular-nums"
@@ -619,16 +620,12 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                         >
                                             {isConfirmed ? "確定済み" : "この日で確定"}
                                         </button>
-                                    ) : (
-                                        <div
-                                            className={cn(
-                                                "rounded text-xs py-1 px-2 font-semibold text-center whitespace-nowrap",
-                                                isConfirmed ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground"
-                                            )}
-                                        >
-                                            {isConfirmed ? "確定済み" : "未確定"}
+                                    ) : isConfirmed ? (
+                                        // 確定した日にだけ印を付ける（「未確定」は押せるボタンと紛らわしいので出さない）
+                                        <div className="rounded text-xs py-1 px-2 font-semibold text-center whitespace-nowrap bg-emerald-600 text-white">
+                                            確定済み
                                         </div>
-                                    )}
+                                    ) : null}
                                 </div>
                             ) : (
                                 <div className="flex items-center gap-1 shrink-0">
