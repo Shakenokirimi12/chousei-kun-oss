@@ -49,6 +49,7 @@ export function AllDayRangeSelector({
     // 上限超過で選択を拒否した際、カレンダー内部の一時的な表示状態が
     // 直前の(却下された)選択のまま残らないよう、key変更で強制的に作り直す。
     const [calendarResetKey, setCalendarResetKey] = React.useState(0);
+    const [chipNotice, setChipNotice] = React.useState<string | null>(null);
 
     // 選択中候補から表示用の範囲(最小日〜最大日)を導出する
     const selectedDates = React.useMemo(
@@ -99,9 +100,14 @@ export function AllDayRangeSelector({
     const toggleDay = (candidate: string, active: boolean) => {
         if (active) {
             // 全日除外は不可（候補0件のイベントは作れない）
-            if (selected.length <= 1) return;
+            if (selected.length <= 1) {
+                setChipNotice("候補は1日以上必要です。この日を外すときは、先に別の日を候補に戻してください。");
+                return;
+            }
+            setChipNotice(null);
             onChange(selected.filter((c) => c !== candidate));
         } else {
+            setChipNotice(null);
             onChange([...selected, candidate].sort());
         }
     };
@@ -178,6 +184,11 @@ export function AllDayRangeSelector({
                             <p className="text-xs text-muted-foreground">
                                 候補にしない日はクリックで除外できます（{selected.length}日選択中）
                             </p>
+                            {chipNotice ? (
+                                <p role="status" className="w-full text-xs font-medium text-red-600 dark:text-red-400">
+                                    {chipNotice}
+                                </p>
+                            ) : null}
                             {chipDays.some((c) => c.date.getDay() === 0 || c.date.getDay() === 6) && (
                                 <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={toggleAllWeekends}>
                                     {hasActiveWeekend ? "土日をまとめて除外" : "土日を候補に戻す"}
