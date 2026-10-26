@@ -83,6 +83,10 @@ export function PeriodSelector({
         onChange(nextPeriods);
         if (nextDates) setViewDates(nextDates);
     };
+    // 操作できなかった理由の案内。次に候補か日付が変わったら、もう古いので閉じる
+    const showMessage = (message: string) => {
+        setNotice({ message, after: { periods: selectedPeriods, dates: viewDates } });
+    };
     const undoLastChange = () => {
         if (!notice?.undo) return;
         setViewDates(notice.undo.dates);
@@ -184,23 +188,28 @@ export function PeriodSelector({
         if (!viewport) return;
         // 下書きの復元などで候補が後から入ったときは、その候補が見えていなければもう一度だけ合わせる
         if (didInitialScrollRef.current && (scrolledWithCandidatesRef.current || selectedPeriods.length === 0)) return;
-        const startMinutes = selectedPeriods
+        const slots = selectedPeriods
             .map((p) => {
                 const [, slot] = p.split("_");
                 if (!slot) return null;
                 const type = slot.startsWith("H") ? "H" : "P";
-                return getSlotInfo(type, parseInt(slot.replace(/[PH]/, ""), 10))?.startMin ?? null;
+                return getSlotInfo(type, parseInt(slot.replace(/[PH]/, ""), 10));
             })
-            .filter((m): m is number => m !== null);
+            .filter((info): info is NonNullable<typeof info> => info !== null);
+        const earliest = slots.length > 0 ? slots.reduce((a, b) => (b.startMin < a.startMin ? b : a)) : null;
         const firstPeriodStart = CUSTOM_PERIODS[0] ? getSlotInfo("P", CUSTOM_PERIODS[0].id)?.startMin : undefined;
-        const target = startMinutes.length > 0 ? Math.min(...startMinutes) : (firstPeriodStart ?? 9 * 60);
-        const targetTop = (target - START_MINUTES) * PIXELS_PER_MINUTE;
-        const isVisible = targetTop >= viewport.scrollTop && targetTop <= viewport.scrollTop + viewport.clientHeight - 64;
+        const targetStart = earliest?.startMin ?? firstPeriodStart ?? 9 * 60;
+        const targetTop = (targetStart - START_MINUTES) * PIXELS_PER_MINUTE;
+        const targetBottom = ((earliest?.endMin ?? targetStart) - START_MINUTES) * PIXELS_PER_MINUTE;
+        // 一部でも見えていれば合わせ直さない。利用者がクリックして入れた候補は必ず見えているので、
+        // 最初のクリックで表示が飛ぶことはない
+        const isVisible = targetBottom >= viewport.scrollTop && targetTop <= viewport.scrollTop + viewport.clientHeight;
         if (!didInitialScrollRef.current || !isVisible) {
             viewport.scrollTop = Math.max(0, targetTop - 30 * PIXELS_PER_MINUTE);
         }
         didInitialScrollRef.current = true;
-        if (startMinutes.length > 0) scrolledWithCandidatesRef.current = true;
+        // 時限定義に無い候補しか無くても、合わせ直しは1回で終える（毎回の描画で引き戻さない）
+        if (selectedPeriods.length > 0) scrolledWithCandidatesRef.current = true;
     });
 
     // Helper to get exact slot info
@@ -257,11 +266,11 @@ export function PeriodSelector({
             .map(p => p.split("_")[1]);
 
         if (sourceSelections.length === 0) {
-            setNotice({ message: "この日にはまだ候補がありません。先に候補を選んでからコピーしてください。" });
+            showMessage("この日にはまだ候補がありません。先に候補を選んでからコピーしてください。");
             return;
         }
         if (viewDates.length < 2) {
-            setNotice({ message: "コピー先の日がありません。左のカレンダーで日付を追加してください。" });
+            showMessage("コピー先の日がありません。左のカレンダーで日付を追加してください。");
             return;
         }
 
@@ -304,7 +313,10 @@ export function PeriodSelector({
         if (!focusedDate) return;
         const dateStr = format(focusedDate, "yyyy-MM-dd");
         const next = selectedPeriods.filter(p => !p.startsWith(dateStr));
-        if (next.length === selectedPeriods.length) return;
+        if (next.length === selectedPeriods.length) {
+            showMessage("この日にはまだ候補がありません。");
+            return;
+        }
         changeWithUndo(`${format(focusedDate, "M/d(E)", { locale: ja })} の候補をすべて外しました。`, next);
     };
 
@@ -324,11 +336,11 @@ export function PeriodSelector({
         // time 入力は 24:00 を受け付けないので、終了の 0:00 は「その日の終わり（24:00）」とみなす
         const end = parsedEnd === 0 ? 24 : parsedEnd;
         if (start === null || end === null) {
-            setNotice({ message: "開始と終了の時刻を入力してください。" });
+            showMessage("開始と終了の時刻を入力してください。");
             return;
         }
         if (end <= start) {
-            setNotice({ message: "終了時刻は開始時刻より後にしてください（24:00 まで選ぶときは終了を 0:00 にします）。" });
+            showMessage("終了時刻は開始時刻より後にしてください（24:00 まで選ぶときは終了を 0:00 にします）。");
             return;
         }
         setNotice(null);
@@ -361,7 +373,7 @@ export function PeriodSelector({
             .filter((p) => p.startsWith(srcDateStr))
             .map((p) => p.split("_")[1]); // 例: "P3", "H10"
         if (sourceSlots.length === 0) {
-            setNotice({ message: "この日にはまだ候補がありません。先に候補を選んでから繰り返してください。" });
+            showMessage("この日にはまだ候補がありません。先に候補を選んでから繰り返してください。");
             return;
         }
         setNotice(null);
