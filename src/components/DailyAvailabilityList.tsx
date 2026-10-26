@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { X, Triangle, Circle, CalendarClock, CalendarDays, List, CircleAlert } from "lucide-react";
 import { format } from "date-fns";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { formatAllDayCandidateLabel, parseCandidateDate, allDayEventDateRange } from "@/lib/candidates";
+import { formatAllDayCandidateLabel, parseCandidateDate, allDayEventDateRange, UNANSWERED } from "@/lib/candidates";
 
 /** 取り込んだ予定1件分の表示用情報（何の予定か・どのカレンダー由来か） */
 type BusyDetail = { summary: string; source: string };
@@ -49,32 +49,37 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
     // カレンダー表示とリスト表示の切替（既定はカレンダー）
     const [view, setView] = useState<"calendar" | "list">("calendar");
     // カレンダーの「ブラシ」: 選択中の状態を日付のタップ/ドラッグで塗る。
-    // 既定は ×（全日が○で始まるため、最初に塗るのは「いない日」が普通）。
-    const [brush, setBrush] = useState<number>(0);
+    // 全日が未回答で始まるので、既定は○（いる日から塗っていく）。
+    const [brush, setBrush] = useState<number>(2);
 
     // ドラッグ一括入力: ○/△/× ボタン（カレンダーではセル）を押したままなぞると、
     // 通過した日に同じ回答を連続適用する（タイムラインの一括操作の終日版）。
     const dragStatusRef = useRef<number | null>(null);
     const lastDragIdxRef = useRef<number | null>(null);
+    // タッチでは押した瞬間に塗らない。指でページを縦にスクロールしようとしただけで
+    // 触れた日が塗られてしまうため。縦スクロールが始まるとブラウザが pointercancel を
+    // 送ってくるので、そのときは何も塗らない。指を離した（タップ）か、別の日へ
+    // なぞったときに初めて塗る。
+    const pendingIdxRef = useRef<number | null>(null);
 
-    const startDrag = (idx: number, status: number) => (e: React.PointerEvent) => {
+    const beginPaint = (idx: number, status: number, e: React.PointerEvent) => {
         if (e.pointerType === "mouse" && e.button !== 0) return;
-        // pointerdown の default を止めて click の二重発火とテキスト選択を防ぐ
-        e.preventDefault();
         dragStatusRef.current = status;
         lastDragIdxRef.current = idx;
+        if (e.pointerType === "touch") {
+            pendingIdxRef.current = idx;
+            return;
+        }
+        // pointerdown の default を止めて click の二重発火とテキスト選択を防ぐ
+        e.preventDefault();
         onStatusChange(idx, status);
     };
 
+    const startDrag = (idx: number, status: number) => (e: React.PointerEvent) => beginPaint(idx, status, e);
+
     // カレンダーセル用: 選択中のブラシ状態を塗る。そのままドラッグすると
     // 通過したセルにも同じ状態を塗り広げる（ペイントツール方式）。
-    const startCellDrag = (idx: number) => (e: React.PointerEvent) => {
-        if (e.pointerType === "mouse" && e.button !== 0) return;
-        e.preventDefault();
-        dragStatusRef.current = brush;
-        lastDragIdxRef.current = idx;
-        onStatusChange(idx, brush);
-    };
+    const startCellDrag = (idx: number) => (e: React.PointerEvent) => beginPaint(idx, brush, e);
 
     useEffect(() => {
         if (mode !== "response") return;
@@ -88,21 +93,33 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
             if (!row) return;
             const idx = Number(row.dataset.dragIdx);
             if (!Number.isInteger(idx) || idx === lastDragIdxRef.current) return;
+            if (pendingIdxRef.current !== null) {
+                onStatusChange(pendingIdxRef.current, status);
+                pendingIdxRef.current = null;
+            }
             lastDragIdxRef.current = idx;
             onStatusChange(idx, status);
         };
-        const stopDrag = () => {
+        const resetDrag = () => {
             dragStatusRef.current = null;
             lastDragIdxRef.current = null;
+            pendingIdxRef.current = null;
+        };
+        const endDrag = () => {
+            const status = dragStatusRef.current;
+            if (status !== null && pendingIdxRef.current !== null) {
+                onStatusChange(pendingIdxRef.current, status);
+            }
+            resetDrag();
         };
 
         window.addEventListener("pointermove", handleMove);
-        window.addEventListener("pointerup", stopDrag);
-        window.addEventListener("pointercancel", stopDrag);
+        window.addEventListener("pointerup", endDrag);
+        window.addEventListener("pointercancel", resetDrag);
         return () => {
             window.removeEventListener("pointermove", handleMove);
-            window.removeEventListener("pointerup", stopDrag);
-            window.removeEventListener("pointercancel", stopDrag);
+            window.removeEventListener("pointerup", endDrag);
+            window.removeEventListener("pointercancel", resetDrag);
         };
     }, [mode, onStatusChange]);
 
@@ -182,6 +199,7 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
 
     const renderStatusIcon = useCallback((status: number) => {
         switch (status) {
+            case UNANSWERED: return <span className="text-[10px] font-bold text-muted-foreground">未回答</span>;
             case 0: return <X className="w-4 h-4 text-red-500" />;
             case 1: return <Triangle className="w-4 h-4 text-yellow-500" />;
             case 2: return <Circle className="w-4 h-4 text-green-500" />;
@@ -353,7 +371,8 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                                     }}
                                                     aria-label={`${formatAllDayCandidateLabel(candidate)} を選択中の状態にする`}
                                                     className={cn(
-                                                        "min-h-16 sm:min-h-24 rounded-md border p-1.5 flex flex-col items-stretch text-left touch-none select-none transition-colors cursor-pointer",
+                                                        "min-h-16 sm:min-h-24 rounded-md border p-1.5 flex flex-col items-stretch text-left touch-pan-y select-none transition-colors cursor-pointer",
+                                                        status === UNANSWERED && "border-dashed border-muted-foreground/50 hover:bg-muted/50",
                                                         status === 2 && "bg-green-500/10 border-green-500/60 hover:bg-green-500/20",
                                                         status === 1 && "bg-yellow-500/10 border-yellow-500/60 hover:bg-yellow-500/20",
                                                         status === 0 && "bg-red-500/10 border-red-500/60 hover:bg-red-500/20"
@@ -389,6 +408,8 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                                             <Circle className="w-7 h-7 sm:w-10 sm:h-10 text-green-500" />
                                                         ) : status === 1 ? (
                                                             <Triangle className="w-7 h-7 sm:w-10 sm:h-10 text-yellow-500" />
+                                                        ) : status === UNANSWERED ? (
+                                                            <span className="text-[10px] sm:text-xs font-bold text-muted-foreground">未回答</span>
                                                         ) : (
                                                             <X className="w-7 h-7 sm:w-10 sm:h-10 text-red-500" />
                                                         )}
@@ -421,7 +442,8 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                                         <span className="text-[9px] bg-sky-100 text-sky-700 px-1 rounded-sm font-bold whitespace-nowrap">推奨</span>
                                                     )}
                                                 </span>
-                                                <div className="grid grid-cols-3 gap-0.5 text-[10px] sm:text-xs">
+                                                {/* スマホのカレンダーは1マスが狭く、横に3つ並べると数字が潰れるので縦に積む */}
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-0.5 text-[11px] sm:text-xs font-bold">
                                                     <button
                                                         type="button"
                                                         className="rounded border border-green-400/50 bg-green-500/20 text-green-700 text-center py-0.5 hover:bg-green-500/35 transition-colors cursor-pointer tabular-nums"
@@ -598,16 +620,12 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                         >
                                             {isConfirmed ? "確定済み" : "この日で確定"}
                                         </button>
-                                    ) : (
-                                        <div
-                                            className={cn(
-                                                "rounded text-xs py-1 px-2 font-semibold text-center whitespace-nowrap",
-                                                isConfirmed ? "bg-emerald-600 text-white" : "bg-muted text-muted-foreground"
-                                            )}
-                                        >
-                                            {isConfirmed ? "確定済み" : "未確定"}
+                                    ) : isConfirmed ? (
+                                        // 確定した日にだけ印を付ける（「未確定」は押せるボタンと紛らわしいので出さない）
+                                        <div className="rounded text-xs py-1 px-2 font-semibold text-center whitespace-nowrap bg-emerald-600 text-white">
+                                            確定済み
                                         </div>
-                                    )}
+                                    ) : null}
                                 </div>
                             ) : (
                                 <div className="flex items-center gap-1 shrink-0">
@@ -617,7 +635,7 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                         onClick={() => onStatusChange(idx, 2)}
                                         onPointerDown={startDrag(idx, 2)}
                                         className={cn(
-                                            "w-10 h-9 flex items-center justify-center rounded-md transition-colors border touch-none",
+                                            "w-10 h-9 flex items-center justify-center rounded-md transition-colors border touch-pan-y",
                                             status === 2
                                                 ? "bg-green-500 text-white border-green-500 shadow-inner"
                                                 : "border-border hover:bg-green-500/20 text-green-600 dark:text-green-400"
@@ -633,7 +651,7 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                         onClick={() => onStatusChange(idx, 1)}
                                         onPointerDown={startDrag(idx, 1)}
                                         className={cn(
-                                            "w-10 h-9 flex items-center justify-center rounded-md transition-colors border touch-none",
+                                            "w-10 h-9 flex items-center justify-center rounded-md transition-colors border touch-pan-y",
                                             status === 1
                                                 ? "bg-yellow-500 text-white border-yellow-500 shadow-inner"
                                                 : "border-border hover:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
@@ -649,7 +667,7 @@ export const DailyAvailabilityList = memo(function DailyAvailabilityList({
                                         onClick={() => onStatusChange(idx, 0)}
                                         onPointerDown={startDrag(idx, 0)}
                                         className={cn(
-                                            "w-10 h-9 flex items-center justify-center rounded-md transition-colors border touch-none",
+                                            "w-10 h-9 flex items-center justify-center rounded-md transition-colors border touch-pan-y",
                                             status === 0
                                                 ? "bg-red-500 text-white border-red-500 shadow-inner"
                                                 : "border-border hover:bg-red-500/20 text-red-600 dark:text-red-400"

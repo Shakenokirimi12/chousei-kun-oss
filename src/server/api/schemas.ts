@@ -54,7 +54,8 @@ export const participateSchema = z.object({
     availabilities: z.array(z.number().int().min(0).max(2)).max(500),
     participantId: z.string().uuid().optional(),
     userId: z.string().uuid().optional(),
-    notifyOnFinalize: z.boolean().optional().default(false),
+    // 省略時: 新規は通知なし、既存回答の更新は保存済みの通知設定をそのまま残す
+    notifyOnFinalize: z.boolean().optional(),
     notificationEmail: z.string().email().max(254).optional().or(z.literal("")).default(""),
 });
 

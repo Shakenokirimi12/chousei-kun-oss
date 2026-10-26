@@ -409,7 +409,18 @@ export function EventForm() {
 
             // 「自分が作ったイベント一覧」(/me) で再表示できるよう、
             // localStorage の userId を作成者として送る。
-            const creatorUserId = typeof window !== "undefined" ? localStorage.getItem("chosei_user_id") || undefined : undefined;
+            // 作成画面は useUser を使わないので、まだ ID が無い端末ではここで発行する。
+            // 発行しないと、初めての端末で作ったイベントがマイページに載らない。
+            let creatorUserId: string | undefined;
+            if (typeof window !== "undefined") {
+                creatorUserId = localStorage.getItem("chosei_user_id") || undefined;
+                // randomUUID は HTTPS / localhost でしか使えない。LAN の IP で開いた開発環境などでは
+                // マイページへの掲載をあきらめ、作成そのものは止めない
+                if (!creatorUserId && typeof crypto.randomUUID === "function") {
+                    creatorUserId = crypto.randomUUID();
+                    localStorage.setItem("chosei_user_id", creatorUserId);
+                }
+            }
             const response = await fetch("/api/events", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -445,8 +456,10 @@ export function EventForm() {
         // 旧実装はモーダル(setFeedback)でコピー成功を通知していたが画面を遮るため、
         // 各 URL ボタンに inline で状態を持たせるよう変更した（下記 UrlShareCard）。
 
+        // PC の作成ページは h-dvh overflow-hidden（タイムライン編集用の1画面レイアウト）なので、
+        // 完了画面はこの中で自前でスクロールさせる。させないと背の低い画面で管理用 URL が見切れる。
         return (
-            <div className="w-full animate-in fade-in zoom-in-95 duration-500">
+            <div className="w-full flex-1 min-h-0 overflow-y-auto animate-in fade-in zoom-in-95 duration-500">
                 <Card className="border-2 border-primary/20 bg-card/50 backdrop-blur-md shadow-2xl overflow-hidden">
                     <CardHeader className="text-center pb-2">
                         <div className="mx-auto w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
@@ -478,6 +491,13 @@ export function EventForm() {
                                 url={adminUrl}
                                 hint="回答状況を確認し、最終日程を決定するためのプライベートなURLです。"
                             />
+                            <p className="text-sm text-muted-foreground">
+                                作成したイベントは、この端末の
+                                <Link href="/me" className="mx-1 underline underline-offset-4 hover:text-foreground">
+                                    マイページ
+                                </Link>
+                                からも開けます。別の端末では表示されないので、管理用 URL は控えておいてください。
+                            </p>
                         </div>
                     </CardContent>
                     <CardFooter className="flex flex-col gap-3 pb-8">
@@ -503,10 +523,10 @@ export function EventForm() {
     }
 
     return (
-        <div className="w-full max-w-none mx-auto flex-1 min-h-0 flex overflow-hidden">
+        <div className="w-full max-w-none mx-auto flex-1 md:min-h-0 flex md:overflow-hidden">
             <div className="flex-1 flex flex-col min-w-0 p-4 lg:p-6">
                 {/* STEP インジケータ付きの簡潔なヘッダー */}
-                <div className="mb-3 sm:mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center shrink-0 gap-3">
+                <div className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-background/95 backdrop-blur md:static md:mx-0 md:px-0 md:py-0 md:bg-transparent md:backdrop-blur-none mb-3 sm:mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center shrink-0 gap-3">
                     <div className="text-left">
                         <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground tracking-wide">
                             <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
@@ -537,7 +557,7 @@ export function EventForm() {
                     </div>
                 </div>
 
-                <div className="flex-1 min-h-0 relative w-full flex flex-col">
+                <div className="flex-1 md:min-h-0 relative w-full flex flex-col">
                     <div className="space-y-2 shrink-0 pb-2 top-0 bg-background/95 backdrop-blur z-10">
                         <div className="flex justify-between items-end flex-wrap gap-2">
                             <Tabs
@@ -574,7 +594,7 @@ export function EventForm() {
                         </div>
                     </div>
 
-                    <div className="flex-1 min-h-0 relative bg-transparent sm:bg-card/10 sm:border rounded-lg overflow-hidden flex flex-col">
+                    <div className="flex-1 md:min-h-0 relative bg-transparent sm:bg-card/10 sm:border rounded-lg md:overflow-hidden flex flex-col">
                         {selectionMode === "timed" ? (
                             <PeriodSelector
                                 selectedPeriods={selectedPeriods}

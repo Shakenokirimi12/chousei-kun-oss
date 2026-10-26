@@ -14,7 +14,7 @@ export default function NotFound() {
                     <Button>トップへ戻る</Button>
                 </Link>
                 <Link href="/create">
-                    <Button variant="outline">新しい予定表を作成</Button>
+                    <Button variant="outline">新しいイベントを作成</Button>
                 </Link>
             </div>
         </div>

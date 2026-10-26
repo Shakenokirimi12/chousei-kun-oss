@@ -197,7 +197,8 @@ eventsRoutes.get("/:id", sValidator("param", eventIdParamSchema), async (c) => {
 });
 
 // 参加者自身の編集用に、自分のレコードのみ返す（イベント所属を検証）。
-// participantId を知っている本人のみが取得できるため、一覧での PII 一括露出を避ける。
+// participantId は公開の GET /:id でも返っていて秘密ではないので、通知用メールアドレスそのものは返さない。
+// 返すと、結果を見られる人なら誰でも全参加者のアドレスを集められてしまう。
 eventsRoutes.get(
     "/:id/participant/:participantId",
     sValidator("param", ownParticipantParamSchema),
@@ -221,7 +222,7 @@ eventsRoutes.get(
             name: (await decryptPii(row.name)) ?? "",
             comment: await decryptPii(row.comment),
             notifyOnFinalize: row.notifyOnFinalize,
-            notificationEmail: await decryptPii(row.notificationEmail),
+            hasNotificationEmail: !!row.notificationEmail,
         });
     }
 );
@@ -239,13 +240,11 @@ eventsRoutes.post(
         }
         const db = createDb(c.env.DB);
         const { name, comment, availabilities: statuses, participantId, userId, notifyOnFinalize, notificationEmail } = c.req.valid("json");
-        const cookieHeader = c.req.header("cookie") ?? "";
-        const googleSessionId = parseCookieValue(cookieHeader, "chousei_google_session");
-        const googleSession = googleSessionId ? await refreshGoogleTokenIfNeeded(db, googleSessionId) : null;
-
         const normalizedComment = comment || null;
-        const normalizedNotificationEmail = notificationEmail?.trim() ? notificationEmail.trim() : (googleSession?.email ?? null);
-        const effectiveNotifyOnFinalize = notifyOnFinalize || !!googleSession?.email;
+        // 通知は本人が明示的に希望したときだけ有効にし、そのときだけメールアドレスを保存する。
+        // Google 連携のアドレスで勝手に有効にすると、本人の知らないうちに主催者へアドレスが渡る。
+        const effectiveNotifyOnFinalize = !!notifyOnFinalize;
+        const normalizedNotificationEmail = effectiveNotifyOnFinalize && notificationEmail?.trim() ? notificationEmail.trim() : null;
         if (effectiveNotifyOnFinalize && !normalizedNotificationEmail) {
             return c.json({ error: "通知を受け取る場合はメールアドレスが必要です" }, 400);
         }
@@ -264,14 +263,17 @@ eventsRoutes.post(
             if (!existing || existing.eventId !== eventId) {
                 return c.json({ error: "Participant not found" }, 404);
             }
+            // 回答画面は通知設定を扱わない（設定は完了画面の /notification で行う）ので、
+            // notifyOnFinalize を省略した更新では保存済みの通知設定とアドレスに触れない。
             await db
                 .update(participants)
                 .set({
                     name: encName,
                     comment: encComment,
                     userId: userId ?? null,
-                    notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0,
-                    notificationEmail: encEmail,
+                    ...(notifyOnFinalize === undefined
+                        ? {}
+                        : { notifyOnFinalize: effectiveNotifyOnFinalize ? 1 : 0, notificationEmail: encEmail }),
                 })
                 .where(eq(participants.id, participantId));
         } else {
@@ -510,7 +512,7 @@ eventsRoutes.get(
         const statusMap = new Map<string, number>();
         for (const a of availabilityRows) statusMap.set(`${a.participantId}:${a.candidateIdx}`, a.status);
 
-        // status: 0=× / 1=△ / 2=○（EventView と同じ正準マッピング）。未回答は "-"。
+        // status: 0=× / 1=△ / 2=○（ParticipantTable と同じ正準マッピング）。未回答は "-"。
         const symbolFor = (s: number | undefined) => {
             if (s === 0) return "×";
             if (s === 1) return "△";
@@ -581,6 +583,7 @@ eventsRoutes.patch(
             columns: {
                 id: true,
                 candidates: true,
+                confirmedCandidateIdx: true,
             },
         });
         if (!currentEvent) return c.json({ error: "Event not found" }, 404);
@@ -632,10 +635,15 @@ eventsRoutes.patch(
                 ).bind(...binds)
             );
         }
+        // 確定済みの候補も回答と同じく付け替える。位置のまま残すと、候補の追加・削除・並べ替えで
+        // 確定先が別の候補にずれる。確定していた候補が消えた場合は未確定に戻す。
+        const confirmedCandidate =
+            currentEvent.confirmedCandidateIdx !== null ? oldCandidates[currentEvent.confirmedCandidateIdx] : undefined;
+        const nextConfirmedIdx = confirmedCandidate !== undefined ? (indexMap.get(confirmedCandidate) ?? null) : null;
         statements.push(
             c.env.DB.prepare(
-                `UPDATE events SET title = ?, description = ?, candidates = ? WHERE id = ?`
-            ).bind(title, description || null, JSON.stringify(nextCandidates), id)
+                `UPDATE events SET title = ?, description = ?, candidates = ?, confirmed_candidate_idx = ? WHERE id = ?`
+            ).bind(title, description || null, JSON.stringify(nextCandidates), nextConfirmedIdx, id)
         );
         await c.env.DB.batch(statements);
 

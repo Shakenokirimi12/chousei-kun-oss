@@ -8,7 +8,9 @@ import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
 import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
 import { isAllDayEvent } from "@/lib/candidates";
 import { ParticipantComments } from "@/components/ParticipantComments";
+import { ParticipantTable } from "@/components/ParticipantTable";
 import { ConfirmedScheduleCard } from "@/components/ConfirmedScheduleCard";
+import { useCopy } from "@/hooks/useCopy";
 
 type Participant = {
     id: string;
@@ -86,6 +88,7 @@ export const EventResultsView = memo(function EventResultsView({
     }, [availabilities, candidates, participantNameById]);
 
     const confirmedCandidate = confirmedCandidateIdx !== null ? candidates[confirmedCandidateIdx] : null;
+    const answerUrlCopy = useCopy();
 
     return (
         <div className="space-y-6">
@@ -98,23 +101,21 @@ export const EventResultsView = memo(function EventResultsView({
                 />
             )}
             {participants.length === 0 && (
-                <div className="rounded-lg border border-dashed p-8 text-center space-y-3">
-                    <Users className="mx-auto h-8 w-8 text-muted-foreground/60" />
+                // スマホでは候補を押し下げすぎないよう、余白とアイコンを控えめにする
+                <div className="rounded-lg border border-dashed p-4 sm:p-8 text-center space-y-2 sm:space-y-3">
+                    <Users className="mx-auto hidden sm:block h-8 w-8 text-muted-foreground/60" />
                     <p className="font-medium">まだ回答がありません</p>
                     <p className="text-sm text-muted-foreground">
-                        参加してほしい人にこのページの URL を共有して回答してもらいましょう。
+                        参加してほしい人に回答用の URL を共有して、回答してもらいましょう。
                     </p>
                     <div className="flex items-center justify-center gap-2 flex-wrap">
                         <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => {
-                                const url = `${window.location.origin}/${eventId}`;
-                                navigator.clipboard?.writeText(url);
-                            }}
+                            onClick={() => void answerUrlCopy.copy(`${window.location.origin}/${eventId}`)}
                         >
-                            URL をコピー
+                            {answerUrlCopy.copied ? "コピーしました" : answerUrlCopy.error ? "コピーできませんでした" : "回答用 URL をコピー"}
                         </Button>
                         <Link href={`/${eventId}`}>
                             <Button size="sm">自分も回答する</Button>
@@ -145,6 +146,12 @@ export const EventResultsView = memo(function EventResultsView({
                     candidateParticipants={candidateParticipants}
                 />
             )}
+            <ParticipantTable
+                candidates={candidates}
+                confirmedCandidateIdx={confirmedCandidateIdx}
+                participants={participants}
+                availabilities={availabilities}
+            />
             {participants.length > 0 && <ParticipantComments participants={participants} />}
         </div>
     );

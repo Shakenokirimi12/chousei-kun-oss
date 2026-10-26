@@ -2,6 +2,9 @@ import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS } from "@/config/periods";
 
+/** 回答画面でまだ○△×を選んでいない候補。サーバーには送らない（0〜2 のみ受け付ける）。 */
+export const UNANSWERED = -1;
+
 /**
  * 終日候補: `YYYY-MM-DD_D`。
  * 時限 `YYYY-MM-DD_P<n>` / 時間 `YYYY-MM-DD_H<n>` と同じ配列に混在させることは
@@ -37,7 +40,7 @@ export function formatAllDayCandidateLabel(candidate: string): string {
 
 /**
  * 候補の短いラベル（曜日付き）: 時限 `7/10(金) 1限` / 時間 `7/10(金) 9:00` / 終日 `7/10(金)`。
- * 接頭辞の無い旧形式 `YYYY-MM-DD_<n>` は時限として扱う（EventView / ResponseForm と同じ）。
+ * 接頭辞の無い旧形式 `YYYY-MM-DD_<n>` は時限として扱う（ResponseForm と同じ）。
  * CSV の列見出しや MCP の応答など、サーバー側でも使うので client 専用の
  * PeriodSelector（HOURLY_SLOTS）には依存しない。
  */

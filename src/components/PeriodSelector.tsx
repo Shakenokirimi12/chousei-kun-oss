@@ -70,6 +70,42 @@ export function PeriodSelector({
     // 繰り返し追加: focusedDate の選択を N 回先まで同曜日に展開する
     const [recurrencePeriod, setRecurrencePeriod] = React.useState<"weekly" | "biweekly" | "monthly">("weekly");
     const [recurrenceCount, setRecurrenceCount] = React.useState(4);
+    // 操作の結果を知らせる一行メッセージ。まとめて変える操作（コピー・日付の解除・1日分の解除）は
+    // 確認ダイアログを挟まない代わりに、直前の状態に戻せるようにする。
+    type Snapshot = { periods: string[]; dates: Date[]; focused: Date | null };
+    const [notice, setNotice] = React.useState<{ message: string; undo?: Snapshot; after?: { periods: string[]; dates: Date[] } } | null>(null);
+    const changeWithUndo = (message: string, nextPeriods: string[], nextDates?: Date[]) => {
+        setNotice({
+            message,
+            undo: { periods: selectedPeriods, dates: viewDates, focused: focusedDate },
+            after: { periods: nextPeriods, dates: nextDates ?? viewDates },
+        });
+        onChange(nextPeriods);
+        if (nextDates) setViewDates(nextDates);
+    };
+    // 操作できなかった理由の案内。次に候補か日付が変わったら、もう古いので閉じる。
+    // 何も変えていないので、直前の「元に戻す」が残っていればそのまま使えるようにしておく
+    const showMessage = (message: string) => {
+        setNotice((prev) =>
+            prev?.undo
+                ? { ...prev, message }
+                : { message, after: { periods: selectedPeriods, dates: viewDates } },
+        );
+    };
+    const undoLastChange = () => {
+        if (!notice?.undo) return;
+        setViewDates(notice.undo.dates);
+        setFocusedDate(notice.undo.focused);
+        onChange(notice.undo.periods);
+        setNotice(null);
+    };
+    // 「元に戻す」は直前の操作だけを取り消す。その後に別の変更が入ったら、
+    // 巻き戻すとその変更まで消えてしまうので、取り消しの案内ごと閉じる。
+    React.useEffect(() => {
+        if (notice?.after && (notice.after.periods !== selectedPeriods || notice.after.dates !== viewDates)) {
+            setNotice(null);
+        }
+    }, [notice, selectedPeriods, viewDates]);
 
     // Synchronize viewDates with selectedPeriods (for AI additions)
     React.useEffect(() => {
@@ -111,7 +147,11 @@ export function PeriodSelector({
                 return !removedDateStrs.includes(dateStr);
             });
             if (cleanedPeriods.length !== selectedPeriods.length) {
-                onChange(cleanedPeriods);
+                changeWithUndo(
+                    `${removedDates.map((d) => format(d, "M/d(E)", { locale: ja })).join("、")} の候補 ${selectedPeriods.length - cleanedPeriods.length} 件を外しました。`,
+                    cleanedPeriods,
+                    sorted,
+                );
             }
         }
 
@@ -142,6 +182,40 @@ export function PeriodSelector({
     const END_HOUR = 24;
     const START_MINUTES = START_HOUR * 60;
     const PIXELS_PER_MINUTE = zoomLevel; // Tied to state for zooming
+
+    // 時間軸は 0:00 から描くので、開いたときに最初の候補（無ければ最初の時限か 9:00）の
+    // 少し上までスクロールしておく。最初の1回だけで、以降は利用者のスクロールを尊重する。
+    const timelineViewportRef = React.useRef<HTMLDivElement>(null);
+    const didInitialScrollRef = React.useRef(false);
+    const scrolledWithCandidatesRef = React.useRef(false);
+    React.useEffect(() => {
+        const viewport = timelineViewportRef.current;
+        if (!viewport) return;
+        // 下書きの復元などで候補が後から入ったときは、その候補が見えていなければもう一度だけ合わせる
+        if (didInitialScrollRef.current && (scrolledWithCandidatesRef.current || selectedPeriods.length === 0)) return;
+        const slots = selectedPeriods
+            .map((p) => {
+                const [, slot] = p.split("_");
+                if (!slot) return null;
+                const type = slot.startsWith("H") ? "H" : "P";
+                return getSlotInfo(type, parseInt(slot.replace(/[PH]/, ""), 10));
+            })
+            .filter((info): info is NonNullable<typeof info> => info !== null);
+        const earliest = slots.length > 0 ? slots.reduce((a, b) => (b.startMin < a.startMin ? b : a)) : null;
+        const firstPeriodStart = CUSTOM_PERIODS[0] ? getSlotInfo("P", CUSTOM_PERIODS[0].id)?.startMin : undefined;
+        const targetStart = earliest?.startMin ?? firstPeriodStart ?? 9 * 60;
+        const targetTop = (targetStart - START_MINUTES) * PIXELS_PER_MINUTE;
+        const targetBottom = ((earliest?.endMin ?? targetStart) - START_MINUTES) * PIXELS_PER_MINUTE;
+        // 一部でも見えていれば合わせ直さない。利用者がクリックして入れた候補は必ず見えているので、
+        // 最初のクリックで表示が飛ぶことはない
+        const isVisible = targetBottom >= viewport.scrollTop && targetTop <= viewport.scrollTop + viewport.clientHeight;
+        if (!didInitialScrollRef.current || !isVisible) {
+            viewport.scrollTop = Math.max(0, targetTop - 30 * PIXELS_PER_MINUTE);
+        }
+        didInitialScrollRef.current = true;
+        // 時限定義に無い候補しか無くても、合わせ直しは1回で終える（毎回の描画で引き戻さない）
+        if (selectedPeriods.length > 0) scrolledWithCandidatesRef.current = true;
+    });
 
     // Helper to get exact slot info
     const getSlotInfo = (type: "P" | "H", id: number) => {
@@ -196,7 +270,14 @@ export function PeriodSelector({
             .filter(p => p.startsWith(sourceDateStr))
             .map(p => p.split("_")[1]);
 
-        if (sourceSelections.length === 0) return;
+        if (sourceSelections.length === 0) {
+            showMessage("この日にはまだ候補がありません。先に候補を選んでからコピーしてください。");
+            return;
+        }
+        if (viewDates.length < 2) {
+            showMessage("コピー先の日がありません。左のカレンダーで日付を追加してください。");
+            return;
+        }
 
         const newSelected = [...selectedPeriods];
         viewDates.forEach(date => {
@@ -210,7 +291,11 @@ export function PeriodSelector({
                 }
             });
         });
-        onChange(newSelected);
+        const [y, m, d] = sourceDateStr.split("-").map(Number);
+        changeWithUndo(
+            `${format(new Date(y, m - 1, d), "M/d(E)", { locale: ja })} の候補を他の ${viewDates.length - 1} 日にコピーしました。`,
+            newSelected,
+        );
     };
 
     const selectDayPeriods = () => {
@@ -232,7 +317,12 @@ export function PeriodSelector({
     const clearDayAll = () => {
         if (!focusedDate) return;
         const dateStr = format(focusedDate, "yyyy-MM-dd");
-        onChange(selectedPeriods.filter(p => !p.startsWith(dateStr)));
+        const next = selectedPeriods.filter(p => !p.startsWith(dateStr));
+        if (next.length === selectedPeriods.length) {
+            showMessage("この日にはまだ候補がありません。");
+            return;
+        }
+        changeWithUndo(`${format(focusedDate, "M/d(E)", { locale: ja })} の候補をすべて外しました。`, next);
     };
 
     // Parse "HH:MM" → hour integer (rounded down). Returns null on invalid.
@@ -247,8 +337,18 @@ export function PeriodSelector({
     const applyHourlyRange = (mode: "add" | "remove") => {
         if (!focusedDate) return;
         const start = parseHour(rangeStart);
-        const end = parseHour(rangeEnd);
-        if (start === null || end === null || end <= start) return;
+        const parsedEnd = parseHour(rangeEnd);
+        // time 入力は 24:00 を受け付けないので、終了の 0:00 は「その日の終わり（24:00）」とみなす
+        const end = parsedEnd === 0 ? 24 : parsedEnd;
+        if (start === null || end === null) {
+            showMessage("開始と終了の時刻を入力してください。");
+            return;
+        }
+        if (end <= start) {
+            showMessage("終了時刻は開始時刻より後にしてください（24:00 まで選ぶときは終了を 0:00 にします）。");
+            return;
+        }
+        setNotice(null);
         const dateStr = format(focusedDate, "yyyy-MM-dd");
         const targetKeys = new Set(
             HOURLY_SLOTS
@@ -277,7 +377,11 @@ export function PeriodSelector({
         const sourceSlots = selectedPeriods
             .filter((p) => p.startsWith(srcDateStr))
             .map((p) => p.split("_")[1]); // 例: "P3", "H10"
-        if (sourceSlots.length === 0) return;
+        if (sourceSlots.length === 0) {
+            showMessage("この日にはまだ候補がありません。先に候補を選んでから繰り返してください。");
+            return;
+        }
+        setNotice(null);
 
         const stepDays = recurrencePeriod === "weekly" ? 7 : recurrencePeriod === "biweekly" ? 14 : null;
         const newViewDates = [...viewDates];
@@ -338,9 +442,33 @@ export function PeriodSelector({
     };
 
     return (
-        <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full w-full overflow-hidden">
+        <div className="flex flex-col md:flex-row gap-4 md:gap-6 md:h-full w-full md:overflow-hidden">
+            {/* 左のメニューと右の時間軸のどちらで操作しても目に入るよう、画面下に固定して出す */}
+            {notice ? (
+                <div
+                    role="status"
+                    // 次の画面のモーダル（z-50）より下に置き、モーダルを開いたら背景に隠れるようにする
+                    className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center gap-3 rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
+                >
+                    <span className="flex-1">{notice.message}</span>
+                    {notice.undo ? (
+                        <Button type="button" variant="outline" size="sm" className="h-8 shrink-0" onClick={undoLastChange}>
+                            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                            元に戻す
+                        </Button>
+                    ) : null}
+                    <button
+                        type="button"
+                        onClick={() => setNotice(null)}
+                        className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+                        aria-label="閉じる"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+            ) : null}
             {/* Left Sidebar */}
-            <div className="flex-none w-full md:w-72 flex flex-col gap-4 overflow-y-auto min-h-0 h-full pb-4 md:pb-0 shrink-0 max-h-[50vh] md:max-h-full">
+            <div className="flex-none w-full md:w-72 flex flex-col gap-4 md:overflow-y-auto md:min-h-0 md:h-full md:pb-0 shrink-0">
                 <div className="rounded-md border bg-card p-3 shadow-sm shrink-0">
                     <h3 className="font-semibold text-sm mb-3 px-2">日付を選択</h3>
                     <Calendar
@@ -361,7 +489,7 @@ export function PeriodSelector({
                         <div className="flex items-center gap-2 leading-tight">
                             <Pencil className="w-4 h-4 text-primary shrink-0" />
                             <div className="flex flex-col">
-                                <span className="text-[10px] text-primary/80 font-medium">この日を編集中（右の時間軸をクリックで切替）</span>
+                                <span className="text-xs text-primary/80 font-medium">この日を編集中（右の時間軸をクリックで切替）</span>
                                 <span className="text-base font-bold text-primary">
                                     {format(focusedDate, "M月d日(E)", { locale: ja })}
                                 </span>
@@ -371,7 +499,7 @@ export function PeriodSelector({
                             type="button"
                             variant="ghost"
                             size="sm"
-                            className="h-7 px-2 text-[10px] text-muted-foreground"
+                            className="h-7 px-2 text-xs text-muted-foreground"
                             onClick={clearDayAll}
                             title="この日の選択を全解除"
                         >
@@ -393,7 +521,7 @@ export function PeriodSelector({
 
                 {focusedDate && (
                     <div className="rounded-md border bg-card p-3 shadow-sm flex flex-col shrink-0">
-                        <Tabs defaultValue="time" className="w-full">
+                        <Tabs defaultValue={CUSTOM_PERIODS.length > 0 ? "period" : "time"} className="w-full">
                             <TabsList className="grid w-full grid-cols-3 h-8 mb-3">
                                 <TabsTrigger value="time" className="text-[11px]">時間</TabsTrigger>
                                 <TabsTrigger value="period" className="text-[11px]" disabled={CUSTOM_PERIODS.length === 0}>
@@ -419,8 +547,6 @@ export function PeriodSelector({
                                     <Input
                                         type="time"
                                         step={3600}
-                                        min="01:00"
-                                        max="24:00"
                                         value={rangeEnd}
                                         onChange={(e) => setRangeEnd(e.target.value)}
                                         className="h-9 px-2 text-sm tabular-nums flex-1"
@@ -436,7 +562,7 @@ export function PeriodSelector({
                                 >
                                     この範囲を候補に追加
                                 </Button>
-                                <div className="flex items-center justify-between text-[10px]">
+                                <div className="flex items-center justify-between text-xs">
                                     <button
                                         type="button"
                                         onClick={selectDayHourly}
@@ -454,8 +580,8 @@ export function PeriodSelector({
                                 </div>
                                 <div className="flex items-start gap-2 rounded-md bg-muted/50 px-2 py-1.5">
                                     <Info className="w-3 h-3 mt-0.5 shrink-0 text-muted-foreground" />
-                                    <p className="text-[10px] text-muted-foreground leading-snug">
-                                        個別の時間は右のタイムラインをクリックでも切替できます。
+                                    <p className="text-xs text-muted-foreground leading-snug">
+                                        24:00 まで選ぶときは、終了を 0:00 にします。
                                     </p>
                                 </div>
                             </TabsContent>
@@ -486,7 +612,7 @@ export function PeriodSelector({
 
                             {/* タブ3: 繰り返し */}
                             <TabsContent value="recur" className="mt-0 space-y-2">
-                                <p className="text-[10px] text-muted-foreground leading-snug">
+                                <p className="text-xs text-muted-foreground leading-snug">
                                     この日に選んだ時間帯を、未来の同曜日・同日付に複製します。
                                 </p>
                                 <div className="flex items-center gap-1.5">
@@ -527,9 +653,9 @@ export function PeriodSelector({
             </div>
 
             {/* Right Main Area: Timeline */}
-            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-full overflow-hidden">
+            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-[75dvh] md:h-full overflow-hidden isolate">
 
-                <ScrollArea className="flex-1 w-full h-full overscroll-contain">
+                <ScrollArea className="flex-1 w-full h-full md:overscroll-contain" viewportRef={timelineViewportRef}>
                     {/* Horizontal Scroll Wrapper */}
                     <div className="min-w-full w-fit">
                         {/* 1. Header Row (Sticky Top) */}
@@ -551,7 +677,8 @@ export function PeriodSelector({
                                                 key={date.toISOString()}
                                                 onClick={() => setFocusedDate(date)}
                                                 className={cn(
-                                                    "flex-none border-r w-[120px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-16 group/header",
+                                                    // 右上のコピーボタンと日付が重ならないよう、右側を空けて中央寄せする
+                                                    "flex-none border-r w-[120px] flex flex-col items-center justify-center p-1 pr-8 cursor-pointer transition-colors relative h-16 group/header",
                                                     isFocused
                                                         ? "bg-primary/10 text-primary border-b-2 border-b-primary"
                                                         : "bg-background/50 hover:bg-muted/50 text-muted-foreground"
@@ -559,14 +686,14 @@ export function PeriodSelector({
                                             >
                                                 <span className={cn("text-sm font-bold whitespace-nowrap", isFocused && "text-primary")}>{format(date, "M/d(E)", { locale: ja })}</span>
                                                 {!isFocused && viewDates.length > 1 && (
-                                                    <span className="text-[9px] text-muted-foreground/70 leading-none mt-0.5">クリックで編集</span>
+                                                    <span className="text-[11px] text-muted-foreground leading-none mt-0.5">クリックで編集</span>
                                                 )}
 
                                                 <Button
                                                     type="button"
                                                     variant="ghost"
                                                     size="icon"
-                                                    className="absolute top-1 right-1 w-6 h-6 opacity-100"
+                                                    className="absolute top-1 right-1 w-7 h-7 opacity-100"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         copyDaySelections(format(date, "yyyy-MM-dd"));
@@ -713,7 +840,7 @@ export function PeriodSelector({
                                                         <div className="font-bold flex items-center gap-1">
                                                             {info.label}
                                                             {isConflict && (
-                                                                <span className="text-[9px] font-semibold uppercase tracking-tight bg-red-600 text-white px-1 rounded">重複</span>
+                                                                <span className="text-[10px] font-semibold uppercase tracking-tight bg-red-600 text-white px-1 rounded">重複</span>
                                                             )}
                                                         </div>
                                                     </div>
@@ -730,7 +857,9 @@ export function PeriodSelector({
                                                         return (
                                                             <div
                                                                 key={`target-P${p.id}`}
-                                                                className="absolute inset-x-0 z-0 hover:bg-primary/5 cursor-pointer"
+                                                                // 時限の範囲では時限を優先して入れる（1時間枠より手前に置く）。
+                                                                // 時限の外側だけ、下の1時間枠のクリックが効く。
+                                                                className="absolute inset-x-0 z-[1] hover:bg-primary/5 cursor-pointer"
                                                                 style={style}
                                                                 onClick={(e) => {
                                                                     e.stopPropagation(); // Stop bubbling to column click
@@ -770,7 +899,7 @@ export function PeriodSelector({
                 {/* Legend / Info Footer */}
                 <div className="border-t bg-muted/20 p-2 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-muted-foreground">
                     <div className="text-center sm:text-left">
-                        編集したい日の列をクリックしてから、時間軸内をクリックで時限を選択。時間指定は左のメニューから。
+                        編集したい日の列をクリックしてから、時間軸内をクリックで時限を選択（時限の外は1時間単位）。時間の範囲指定は左のメニューから。
                         <span className="mx-2 inline-block w-3 h-3 bg-primary rounded align-middle"></span> 選択中
                         <span className="mx-2 inline-block w-3 h-3 bg-red-100 border border-red-200 dark:bg-red-900/20 rounded align-middle"></span> 予定あり
                         <span className="mx-2 inline-block w-3 h-3 bg-primary border-2 border-red-500 rounded align-middle"></span> 重複

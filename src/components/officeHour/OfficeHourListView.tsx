@@ -57,9 +57,12 @@ export function OfficeHourListView() {
     if (!data?.authenticated) {
         return (
             <div className="max-w-xl mx-auto py-12 px-4 space-y-6">
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour</h1>
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour（予約受付）</h1>
                 <p className="text-muted-foreground">
-                    Office Hour の管理にはGoogleアカウントの連携が必要です。
+                    面談や相談の時間枠を公開して、相手に空いている枠を予約してもらう機能です。
+                </p>
+                <p className="text-sm text-muted-foreground">
+                    管理にはGoogleアカウントでのログインが必要です。
                 </p>
                 <Button asChild size="lg" className="gap-2">
                     <a href={`/api/google/auth/start?returnTo=${encodeURIComponent("/office-hours")}${userId ? `&userId=${userId}` : ""}`}>
@@ -73,7 +76,7 @@ export function OfficeHourListView() {
     if (data.noUserId) {
         return (
             <div className="max-w-xl mx-auto py-12 px-4 space-y-6">
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour</h1>
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour（予約受付）</h1>
                 <p className="text-muted-foreground">
                     ユーザー情報の紐付けが必要です。お手数ですが、一度ログアウトしてから再連携してください。
                 </p>
@@ -103,7 +106,8 @@ export function OfficeHourListView() {
         <div className="max-w-3xl mx-auto py-8 px-4 sm:px-6 space-y-8">
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour</h1>
+                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">Office Hour（予約受付）</h1>
+                    <p className="text-sm text-muted-foreground mt-1">面談や相談の時間枠を公開して、空いている枠を予約してもらえます。</p>
                     <p className="text-sm text-muted-foreground mt-1">{data.email} でログイン中</p>
                 </div>
                 <Button asChild className="gap-2">

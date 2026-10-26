@@ -13,7 +13,11 @@ const EventForm = dynamic(() => import('@/components/EventForm').then(mod => mod
 
 export default function CreateEventPage() {
 	return (
-		<div className="h-dvh overflow-hidden flex flex-col bg-background text-foreground px-3 sm:px-4 md:px-6 lg:px-8 pt-6 sm:pt-8 pb-2 sm:pb-4">
+		// スマホではページ全体をスクロールさせる。画面の高さに収めると、カレンダーとメニューに
+		// 押されて時間軸がほとんど見えなくなる。PC は従来どおり1画面に収める。
+		// PC の高さから引く 4rem は、レイアウト末尾のヘルプボタン（FeedbackButton の py-4 + h-8）の分。
+		// 引かないと外側のページが 4rem だけスクロールし、見出しが押し出される。
+		<div className="min-h-dvh md:min-h-0 md:h-[calc(100dvh-4rem)] md:overflow-hidden flex flex-col bg-background text-foreground px-3 sm:px-4 md:px-6 lg:px-8 pt-6 sm:pt-8 pb-2 sm:pb-4">
 			<EventForm />
 			<div className="mt-3 shrink-0 rounded-md border bg-card/40 p-3 text-sm">
 				<div className="flex flex-wrap items-center gap-4 text-sm">

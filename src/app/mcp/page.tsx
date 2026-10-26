@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { siteConfig } from "@/config/site";
+import { CopyableCode } from "@/components/CopyableCode";
 
 export const metadata: Metadata = {
     title: `AIエージェント連携（MCP） - ${siteConfig.name}`,
@@ -12,14 +13,6 @@ export const metadata: Metadata = {
 // ビルド時の環境変数から組み立てると、ビルド環境に値が無いときに存在しない
 // 接続先を案内してしまう。
 export const dynamic = "force-dynamic";
-
-function CodeBlock({ children }: { children: string }) {
-    return (
-        <pre className="rounded-md bg-muted p-4 text-xs leading-6 overflow-x-auto">
-            <code>{children}</code>
-        </pre>
-    );
-}
 
 const tools: { name: string; description: string }[] = [
     { name: "create_event", description: "候補日程を指定して、新しい日程調整イベントを作成する" },
@@ -43,10 +36,10 @@ export default async function McpSupportPage() {
     const proto = process.env.NODE_ENV === "development" || isLoopback ? "http" : "https";
     const mcpUrl = `${proto}://${host}/api/mcp`;
     return (
-        <main className="min-h-screen bg-background text-foreground p-6 md:p-10">
+        <main className="min-h-screen bg-background text-foreground p-4 sm:p-6 md:p-10">
             <div className="mx-auto max-w-3xl space-y-8">
                 <div className="space-y-2">
-                    <h1 className="text-3xl font-bold">AIエージェント連携（MCP）</h1>
+                    <h1 className="text-2xl sm:text-3xl font-bold">AIエージェント連携（MCP）</h1>
                     <p className="text-sm leading-7 text-muted-foreground">
                         {siteConfig.name}は、Claudeなどの対応するAIエージェントから直接イベントを作成・確認・操作できる、MCP
                         (Model Context Protocol) サーバーを備えています。エージェントに接続を追加すると、「来週の候補日を作って」
@@ -75,7 +68,7 @@ export default async function McpSupportPage() {
                     <p className="text-sm leading-7 text-muted-foreground">
                         ターミナルで次のコマンドを実行すると、Claude Codeにこのサーバーが登録されます。
                     </p>
-                    <CodeBlock>{`claude mcp add --transport http chousei-kun ${mcpUrl}`}</CodeBlock>
+                    <CopyableCode>{`claude mcp add --transport http chousei-kun ${mcpUrl}`}</CopyableCode>
                     <p className="text-sm leading-7 text-muted-foreground">
                         登録後は <code className="text-xs font-mono px-1 py-0.5 rounded bg-muted">claude mcp list</code>{" "}
                         で接続状態を確認できます。
@@ -88,7 +81,7 @@ export default async function McpSupportPage() {
                         設定ファイルからリモートMCPサーバーを追加できるクライアントでは、サーバー名は任意のもの（例:
                         chousei-kun）、通信方式は HTTP、接続先には次のURLを指定してください。追加のログインやAPIキーは不要です。
                     </p>
-                    <CodeBlock>{mcpUrl}</CodeBlock>
+                    <CopyableCode>{mcpUrl}</CopyableCode>
                 </section>
 
                 <section className="space-y-3">

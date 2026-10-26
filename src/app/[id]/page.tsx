@@ -44,8 +44,9 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
                             <p className="text-muted-foreground mt-1.5 sm:mt-2 text-sm sm:text-base lg:text-lg break-words">{event.description}</p>
                         ) : null}
                     </div>
-                    <Link href={`/${id}/results`} className="w-full sm:w-auto shrink-0">
-                        <Button variant="outline" className="gap-2 group w-full sm:w-auto">
+                    {/* 回答より先に目に入らないよう、スマホでは全幅ボタンにせず控えめなリンクにする */}
+                    <Link href={`/${id}/results`} className="self-start shrink-0">
+                        <Button variant="ghost" size="sm" className="gap-1 group -ml-3 sm:ml-0 text-muted-foreground">
                             結果を確認する
                             <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                         </Button>

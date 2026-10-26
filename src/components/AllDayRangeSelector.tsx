@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { Calendar } from "@/components/ui/calendar";
 import { Button } from "@/components/ui/button";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseCandidateDate } from "@/lib/candidates";
 
@@ -49,6 +50,11 @@ export function AllDayRangeSelector({
     // 上限超過で選択を拒否した際、カレンダー内部の一時的な表示状態が
     // 直前の(却下された)選択のまま残らないよう、key変更で強制的に作り直す。
     const [calendarResetKey, setCalendarResetKey] = React.useState(0);
+    const [chipNotice, setChipNotice] = React.useState<string | null>(null);
+    // 候補が変わったら（範囲の選び直し・土日の出し入れも含む）注意は役目を終えている
+    React.useEffect(() => {
+        setChipNotice(null);
+    }, [selected]);
 
     // 選択中候補から表示用の範囲(最小日〜最大日)を導出する
     const selectedDates = React.useMemo(
@@ -99,7 +105,10 @@ export function AllDayRangeSelector({
     const toggleDay = (candidate: string, active: boolean) => {
         if (active) {
             // 全日除外は不可（候補0件のイベントは作れない）
-            if (selected.length <= 1) return;
+            if (selected.length <= 1) {
+                setChipNotice("候補は1日以上必要です。この日を外すときは、先に別の日を候補に戻してください。");
+                return;
+            }
             onChange(selected.filter((c) => c !== candidate));
         } else {
             onChange([...selected, candidate].sort());
@@ -135,7 +144,11 @@ export function AllDayRangeSelector({
         );
         if (hasActiveWeekend) {
             const next = selected.filter((c) => !weekendCandidates.has(c));
-            if (next.length === 0) return; // 全日除外は不可
+            if (next.length === 0) {
+                // 全日除外は不可
+                setChipNotice("土日を除くと候補が1日も残りません。平日を候補に入れてから除外してください。");
+                return;
+            }
             onChange(next);
         } else {
             onChange([...new Set([...selected, ...weekendCandidates])].sort());
@@ -233,6 +246,23 @@ export function AllDayRangeSelector({
                     </div>
                 )}
             </div>
+            {/* 行を差し込むとチップが下にずれ、続けて押した位置が別の日になるので、時限の作成画面と同じく画面下に重ねて出す */}
+            {chipNotice ? (
+                <div
+                    role="status"
+                    className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center gap-3 rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
+                >
+                    <span className="flex-1">{chipNotice}</span>
+                    <button
+                        type="button"
+                        onClick={() => setChipNotice(null)}
+                        className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"
+                        aria-label="閉じる"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+            ) : null}
         </div>
     );
 }

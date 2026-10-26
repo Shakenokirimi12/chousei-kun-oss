@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { BellOff, Calendar, Loader2, Check, Copy, ExternalLink, RefreshCw, AlertTriangle } from "lucide-react";
 import { useUser } from "@/hooks/useUser";
 import { logActivity } from "@/hooks/useActivityLog";
+import { useCopy } from "@/hooks/useCopy";
 
 type Props = {
     eventId: string;
@@ -25,8 +26,8 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
     const [isSaving, setIsSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-    const [copiedEvent, setCopiedEvent] = useState(false);
-    const [copiedAll, setCopiedAll] = useState(false);
+    const eventIcalCopy = useCopy();
+    const allIcalCopy = useCopy();
     const [isRegenerating, setIsRegenerating] = useState(false);
 
     const trimmedNotificationEmail = notificationEmail.trim();
@@ -78,6 +79,27 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
         // Including it would refire this fetch on every keystroke in the email field.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // 「今は設定しない」を選んだら、保存済みの通知設定とアドレスも消す。以前は選ぶだけで API を
+    // 呼ばなかったので、一度有効にした通知（旧版の Google 連携で自動で有効になったものを含む）を
+    // 画面から解除する手段が無かった。
+    const disableNotification = async () => {
+        setCalendarPreference("none");
+        if (!participantId) return;
+        setSaveError(null);
+        try {
+            const res = await fetch(`/api/events/${eventId}/notification`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ participantId, notifyOnFinalize: false, notificationEmail: "" }),
+            });
+            if (!res.ok) throw new Error("通知の解除に失敗しました。もう一度お試しください。");
+            logActivity("通知設定解除成功");
+        } catch (error) {
+            console.error(error);
+            setSaveError(error instanceof Error ? error.message : "通知の解除に失敗しました。もう一度お試しください。");
+        }
+    };
 
     const handleSave = async () => {
         if (!participantId) return;
@@ -234,7 +256,7 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
 
                         <button
                             type="button"
-                            onClick={() => setCalendarPreference("none")}
+                            onClick={() => void disableNotification()}
                             className={`flex items-start gap-3 p-4 rounded-lg border text-left transition-colors ${
                                 calendarPreference === "none"
                                     ? "border-primary bg-primary/5"
@@ -249,7 +271,7 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                             <div className="flex-1">
                                 <p className="font-medium">今は設定しない</p>
                                 <p className="text-sm text-muted-foreground">
-                                    結果ページでいつでも設定できます
+                                    確定のお知らせメールは届きません
                                 </p>
                             </div>
                             {calendarPreference === "none" && (
@@ -338,16 +360,12 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                                             variant="outline"
                                             size="sm"
                                             onClick={() => {
-                                                if (allEventsIcalUrl) {
-                                                    navigator.clipboard.writeText(allEventsIcalUrl);
-                                                    setCopiedAll(true);
-                                                    setTimeout(() => setCopiedAll(false), 2000);
-                                                }
+                                                if (allEventsIcalUrl) void allIcalCopy.copy(allEventsIcalUrl);
                                             }}
                                             className="gap-2"
                                         >
-                                            {copiedAll ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                            {copiedAll ? "コピーしました" : "URLをコピー"}
+                                            {allIcalCopy.copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                            {allIcalCopy.copied ? "コピーしました" : allIcalCopy.error ? "コピーできませんでした" : "購読用 URL をコピー"}
                                         </Button>
                                     </div>
 
@@ -402,18 +420,16 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                                     variant="outline"
                                     size="sm"
                                     onClick={() => {
-                                        navigator.clipboard.writeText(eventIcalUrl);
-                                        setCopiedEvent(true);
-                                        setTimeout(() => setCopiedEvent(false), 2000);
+                                        void eventIcalCopy.copy(eventIcalUrl);
                                     }}
                                     className="gap-2"
                                 >
-                                    {copiedEvent ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                                    {copiedEvent ? "コピーしました" : "URLをコピー"}
+                                    {eventIcalCopy.copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                    {eventIcalCopy.copied ? "コピーしました" : eventIcalCopy.error ? "コピーできませんでした" : "購読用 URL をコピー"}
                                 </Button>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                「カレンダーに追加」でカレンダーアプリが開きます。URLをコピーして手動で登録することもできます。
+                                「カレンダーに追加」でカレンダーアプリが開きます。購読用 URL をコピーして、カレンダーアプリに手動で登録することもできます。
                             </p>
                         </div>
                     )}
@@ -445,6 +461,9 @@ export function ResponseCompleteForm({ eventId, eventTitle }: Props) {
                         )}
                     </div>
                 )}
+                {calendarPreference !== "google" && saveError ? (
+                    <p className="text-sm text-destructive">{saveError}</p>
+                ) : null}
             </CardContent>
         </Card>
     );

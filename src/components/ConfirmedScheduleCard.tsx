@@ -9,6 +9,7 @@ import { ja } from "date-fns/locale";
 import { parseCandidateToDateTime } from "@/lib/ical";
 import { formatAllDayCandidateLabelLong, nextDateString } from "@/lib/candidates";
 import { budouxify } from "@/lib/budoux";
+import { useCopy } from "@/hooks/useCopy";
 
 type Props = {
     eventId: string;
@@ -25,7 +26,7 @@ export const ConfirmedScheduleCard = memo(function ConfirmedScheduleCard({
 }: Props) {
     const [isAddingToGoogle, setIsAddingToGoogle] = useState(false);
     const [addedToGoogle, setAddedToGoogle] = useState(false);
-    const [copied, setCopied] = useState(false);
+    const icalCopy = useCopy();
 
     const isLocalhost = typeof window !== "undefined" && window.location.hostname === "localhost";
     
@@ -42,9 +43,7 @@ export const ConfirmedScheduleCard = memo(function ConfirmedScheduleCard({
         : "";
 
     const handleCopyUrl = () => {
-        navigator.clipboard.writeText(icalUrl);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        void icalCopy.copy(icalUrl);
     };
 
     const handleAddToGoogle = async () => {
@@ -114,8 +113,8 @@ export const ConfirmedScheduleCard = memo(function ConfirmedScheduleCard({
                         onClick={handleCopyUrl}
                         className="gap-2"
                     >
-                        {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                        {copied ? "コピーしました" : "URLをコピー"}
+                        {icalCopy.copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        {icalCopy.copied ? "コピーしました" : icalCopy.error ? "コピーできませんでした" : "購読用 URL をコピー"}
                     </Button>
 
                     <Button
@@ -144,7 +143,7 @@ export const ConfirmedScheduleCard = memo(function ConfirmedScheduleCard({
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                    「カレンダーに追加」でカレンダーアプリが開きます。URLをコピーして手動で登録することもできます。
+                    「カレンダーに追加」でカレンダーアプリが開きます。購読用 URL をコピーして、カレンダーアプリに手動で登録することもできます。
                 </p>
             </CardContent>
         </Card>

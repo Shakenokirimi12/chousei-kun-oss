@@ -3,11 +3,12 @@
 import { memo, useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { X, Triangle, Circle, ZoomIn, ZoomOut } from "lucide-react";
+import { X, Triangle, Circle, CircleDashed, ZoomIn, ZoomOut } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { UNANSWERED } from "@/lib/candidates";
 
 interface AvailabilityTimelineProps {
     candidates: string[];
@@ -28,8 +29,12 @@ const parseTimeToMinutes = (timeStr: string) => {
     return h * 60 + m;
 };
 
-// タイムラインに余白として確保する前後の時間（分）
-const RANGE_PADDING_MIN = 60;
+// タップで切り替える順番。未回答からは○に進む。
+const nextStatus = (status: number) => (status === 2 ? 1 : status === 1 ? 0 : 2);
+
+// タイムラインに余白として確保する前後の時間（分）。正時に丸めるので、余白を足すと
+// 9:00 開始の候補でも 8:00 から1時間分の空白ができてしまう。丸めだけにする。
+const RANGE_PADDING_MIN = 0;
 // 候補が無いときのフォールバック表示範囲
 const FALLBACK_START_HOUR = 8;
 const FALLBACK_END_HOUR = 20;
@@ -92,27 +97,6 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
         () => (candidateScores.length > 0 ? Math.max(...candidateScores) : 0),
         [candidateScores]
     );
-
-    useEffect(() => {
-        const viewport = viewportRef.current;
-        if (!viewport) return;
-
-        const onWheel = (event: WheelEvent) => {
-            const { scrollTop, scrollHeight, clientHeight } = viewport;
-            const atTop = scrollTop <= 0;
-            const atBottom = scrollTop + clientHeight >= scrollHeight - 1;
-
-            // Prevent scroll chaining to the page when timeline hits top/bottom.
-            if ((event.deltaY < 0 && atTop) || (event.deltaY > 0 && atBottom)) {
-                event.preventDefault();
-            }
-        };
-
-        viewport.addEventListener("wheel", onWheel, { passive: false });
-        return () => {
-            viewport.removeEventListener("wheel", onWheel);
-        };
-    }, []);
 
     // 候補が収まる時間帯だけを表示する（0〜24時の全描画をやめ、空白を削減）。
     const { viewStartMin, viewEndMin } = useMemo(() => {
@@ -195,6 +179,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 
     const renderStatusIcon = useCallback((status: number) => {
         switch (status) {
+            // 狭いブロックの右上に文字を置くと時刻表示に重なるので、他の記号と同じ大きさのアイコンにする
+            case UNANSWERED: return <CircleDashed className="w-4 h-4 text-muted-foreground" aria-label="未回答" />;
             case 0: return <X className="w-4 h-4 text-red-500" />;
             case 1: return <Triangle className="w-4 h-4 text-yellow-500" />;
             case 2: return <Circle className="w-4 h-4 text-green-500" />;
@@ -231,7 +217,11 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                 {hours.map(h => (
                     <div
                         key={h}
-                        className="absolute w-full text-right pr-2 text-xs text-muted-foreground -translate-y-1/2 border-t border-transparent"
+                        // 先頭の時刻は上半分がヘッダーに隠れるので、線の下に置く
+                        className={cn(
+                            "absolute w-full text-right pr-2 text-xs text-muted-foreground border-t border-transparent",
+                            h === startHour ? "translate-y-0" : "-translate-y-1/2"
+                        )}
                         style={{ top: `${(h * 60 - viewStartMin) * zoomLevel}px` }}
                     >
                         {h}:00
@@ -254,8 +244,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                 </>
                             ) : (
                                 <>
-                                    <span className="md:hidden">候補ブロックごとの回答集計を確認できます</span>
-                                    <span className="hidden md:inline">候補ブロックごとの回答集計（○/△/×）と確定済み候補を確認できます</span>
+                                    <span>○△× の数字を押すと、その回答をした人の名前を見られます</span>
                                 </>
                             )}
                         </>
@@ -277,9 +266,6 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                     >
                         <ZoomOut className="w-4 h-4" />
                     </button>
-                    <span className="text-xs w-8 text-center font-medium text-foreground">
-                        {Math.round(zoomLevel * 100 / 1.2)}%
-                    </span>
                     <button
                         type="button"
                         className="h-7 w-7 flex items-center justify-center rounded-sm hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
@@ -292,7 +278,9 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                 </div>
             </div>
 
-            <ScrollArea ref={viewportRef} className="flex-1 min-h-0 w-full relative overscroll-contain">
+            {/* 端まで来たらページのスクロールに引き継ぐ（以前は端でホイールを止めていて、
+                PC でカーソルが上にあるとページを下まで送れなかった） */}
+            <ScrollArea ref={viewportRef} className="flex-1 min-h-0 w-full relative">
                 <div className="flex flex-col min-w-full pb-20">
                     {/* Header Row */}
                     <div className="sticky top-0 z-40 flex border-b bg-background w-full min-w-max">
@@ -306,25 +294,26 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                         key={date.toISOString()}
                                         onClick={() => setFocusedDate(date)}
                                         className={cn(
-                                            "flex-1 border-r min-w-[72px] sm:min-w-[100px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-12 group/header",
-                                            isFocused ? "bg-primary/10 text-primary" : "bg-background hover:bg-muted/50",
-                                            // 右上の一括○×ボタンと日付が重ならないよう、日付を下に寄せる
-                                            mode === "response" && "pt-5"
+                                            "flex-1 border-r flex flex-col items-center justify-center gap-1 p-1 cursor-pointer transition-colors relative group/header",
+                                            mode === "response" ? "min-w-[88px] sm:min-w-[100px] h-[4.5rem]" : "min-w-[120px] h-12",
+                                            isFocused ? "bg-primary/10 text-primary" : "bg-background hover:bg-muted/50"
                                         )}
                                     >
+                                        <span className="text-sm font-bold leading-none whitespace-nowrap">{format(date, "M/d(E)", { locale: ja })}</span>
                                         {mode === "response" ? (
-                                            <div className="absolute top-0.5 right-0.5 flex gap-1 opacity-100">
+                                            // 指で押せる大きさにする（以前は 20px で日付にも重なっていた）
+                                            <div className="flex gap-1.5">
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         onDayStatusChange?.(dateStr, 2);
                                                     }}
-                                                    className="w-5 h-5 rounded-full border border-green-400/60 bg-green-100 text-green-600 hover:bg-green-600 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
+                                                    className="w-9 h-8 rounded-md border border-green-400/60 bg-green-100 text-green-700 hover:bg-green-600 hover:text-white transition-colors flex items-center justify-center cursor-pointer dark:bg-green-950/40 dark:text-green-400"
                                                     title="この日のすべてを○にする"
                                                     aria-label="この日のすべてを参加可能(○)にする"
                                                 >
-                                                    <Circle className="w-3 h-3" />
+                                                    <Circle className="w-4 h-4" />
                                                 </button>
                                                 <button
                                                     type="button"
@@ -332,15 +321,14 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                         e.stopPropagation();
                                                         onDayStatusChange?.(dateStr, 0);
                                                     }}
-                                                    className="w-5 h-5 rounded-full border border-red-400/60 bg-red-100 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center cursor-pointer"
+                                                    className="w-9 h-8 rounded-md border border-red-400/60 bg-red-100 text-red-600 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center cursor-pointer dark:bg-red-950/40 dark:text-red-400"
                                                     title="この日のすべてを×にする"
-                                                    aria-label="この日のすべてを不参加(×)にする"
+                                                    aria-label="この日のすべてを参加不可(×)にする"
                                                 >
-                                                    <X className="w-3 h-3" />
+                                                    <X className="w-4 h-4" />
                                                 </button>
                                             </div>
                                         ) : null}
-                                        <span className="text-sm font-bold leading-none whitespace-nowrap">{format(date, "M/d(E)", { locale: ja })}</span>
                                     </div>
                                 )
                             })}
@@ -368,13 +356,18 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                             {viewDates.map(date => {
                                 const dateStr = format(date, "yyyy-MM-dd");
                                 return (
-                                    <div key={dateStr} className="flex-1 border-r relative min-w-[72px] sm:min-w-[100px]">
+                                    <div key={dateStr} className={cn("flex-1 border-r relative", mode === "response" ? "min-w-[88px] sm:min-w-[100px]" : "min-w-[120px]")}>
                                         {/* Busy Periods (precomputed & memoized per date) */}
                                         {(() => {
                                             const merged = busyByDate.get(dateStr) ?? [];
 
+                                            // 表示範囲は候補ぎりぎりまでなので、範囲外の予定は切り詰め、
+                                            // 完全に外れるものは描かない（はみ出してヘッダー裏や余白に出るのを防ぐ）
                                             return merged.map((ev, j) => {
-                                                const style = getBlockStyle(ev.startMin, ev.endMin, zoomLevel, viewStartMin);
+                                                const startMin = Math.max(ev.startMin, viewStartMin);
+                                                const endMin = Math.min(ev.endMin, viewEndMin);
+                                                if (endMin <= startMin) return null;
+                                                const style = getBlockStyle(startMin, endMin, zoomLevel, viewStartMin);
                                                 return (
                                                     <div
                                                         key={`busy-${j}`}
@@ -413,7 +406,9 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                 ? "bg-green-500/10 border-green-500/50"
                                                                 : status === 1
                                                                     ? "bg-yellow-500/10 border-yellow-500/50"
-                                                                    : "bg-red-500/10 border-red-500/50",
+                                                                    : status === 0
+                                                                        ? "bg-red-500/10 border-red-500/50"
+                                                                        : "bg-background border-dashed border-muted-foreground/50",
                                                         confirmedCandidateIdx === idx ? "ring-2 ring-emerald-600 border-emerald-500" : "",
                                                         (mode === "admin" || mode === "results") &&
                                                             confirmedCandidateIdx !== idx &&
@@ -431,11 +426,11 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                             tabIndex={0}
                                                             aria-label={`${info.label} の出欠を切り替え`}
                                                             className="md:hidden absolute inset-0 z-30 cursor-pointer"
-                                                            onClick={() => onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2)}
+                                                            onClick={() => onStatusChange(idx, nextStatus(status))}
                                                             onKeyDown={(e) => {
                                                                 if (e.key === "Enter" || e.key === " ") {
                                                                     e.preventDefault();
-                                                                    onStatusChange(idx, status === 2 ? 1 : status === 1 ? 0 : 2);
+                                                                    onStatusChange(idx, nextStatus(status));
                                                                 }
                                                             }}
                                                         />
@@ -443,9 +438,10 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 
                                                     <div className="flex flex-col h-full p-1 relative z-10">
                                                         <div className="flex justify-between items-start mb-0.5">
-                                                            <div className="flex flex-col leading-tight">
-                                                                <div className="flex items-center gap-1">
-                                                                    <span className="text-xs font-bold opacity-70">{info.label}</span>
+                                                            <div className="flex flex-col leading-tight min-w-0">
+                                                                {/* 列幅が狭くても1文字ずつ縦に折り返さないよう、各ラベルは折り返さずに行ごと折り返す */}
+                                                                <div className="flex flex-wrap items-center gap-1 whitespace-nowrap">
+                                                                    <span className="text-xs font-bold text-foreground/80">{info.label}</span>
                                                                     {(mode === "admin" || mode === "results") &&
                                                                         confirmedCandidateIdx !== idx &&
                                                                         candidateScores[idx] === maxScore &&
@@ -466,7 +462,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         </span>
                                                                     )}
                                                                 </div>
-                                                                <span className="text-[8px] opacity-60 whitespace-nowrap">{info.sub}</span>
+                                                                <span className="text-[10px] text-muted-foreground whitespace-nowrap">{info.sub}</span>
                                                             </div>
                                                             <div className="md:hidden">
                                                                 {renderStatusIcon(status)}
@@ -475,7 +471,7 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
 
                                                         {mode === "admin" || mode === "results" ? (
                                                             <div className="flex-1 flex flex-col justify-end gap-1">
-                                                                <div className="grid grid-cols-3 gap-1 text-xs">
+                                                                <div className="grid grid-cols-3 gap-1 text-sm font-bold tabular-nums">
                                                                     <button
                                                                         type="button"
                                                                         className="rounded border border-green-400/50 bg-green-500/20 text-green-700 text-center py-1 hover:bg-green-500/35 transition-colors cursor-pointer"
@@ -526,18 +522,13 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                     >
                                                                         {confirmedCandidateIdx === idx ? "確定済み" : "この候補で確定"}
                                                                     </button>
-                                                                ) : (
-                                                                    <div
-                                                                        className={cn(
-                                                                            "rounded text-xs py-1 px-2 font-semibold text-center self-end mt-auto",
-                                                                            confirmedCandidateIdx === idx
-                                                                                ? "bg-emerald-600 text-white"
-                                                                                : "bg-muted text-muted-foreground"
-                                                                        )}
-                                                                    >
-                                                                        {confirmedCandidateIdx === idx ? "確定済み候補" : "未確定"}
+                                                                ) : confirmedCandidateIdx === idx ? (
+                                                                    // 結果画面では確定した候補にだけ印を付ける。「未確定」を全ブロックに出すと、
+                                                                    // 押せるボタンか状態の表示か分からず、狭いブロックからもはみ出していた。
+                                                                    <div className="rounded text-xs py-1 px-2 font-semibold text-center self-end mt-auto bg-emerald-600 text-white whitespace-nowrap">
+                                                                        確定済み
                                                                     </div>
-                                                                )}
+                                                                ) : null}
                                                             </div>
                                                         ) : (
                                                             <div className="hidden md:flex flex-1 items-center justify-around gap-0.5">
@@ -559,8 +550,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
                                                                         status === 1 ? "bg-yellow-500 text-white shadow-inner" : "hover:bg-yellow-500/20 text-yellow-600 dark:text-yellow-400"
                                                                     )}
-                                                                    title="調整中"
-                                                                    aria-label="調整中(△)"
+                                                                    title="未定"
+                                                                    aria-label="未定(△)"
                                                                     aria-pressed={status === 1}
                                                                 >
                                                                     <Triangle className="w-3 h-3" />
@@ -571,8 +562,8 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                                                         "flex-1 h-full max-h-8 flex items-center justify-center rounded-sm transition-colors border border-transparent",
                                                                         status === 0 ? "bg-red-500 text-white shadow-inner" : "hover:bg-red-500/20 text-red-600 dark:text-red-400"
                                                                     )}
-                                                                    title="不参加"
-                                                                    aria-label="不参加(×)"
+                                                                    title="参加不可"
+                                                                    aria-label="参加不可(×)"
                                                                     aria-pressed={status === 0}
                                                                 >
                                                                     <X className="w-3 h-3" />

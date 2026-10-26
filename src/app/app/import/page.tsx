@@ -21,7 +21,7 @@ export default function AppImportPage() {
 				<h1 className="text-2xl font-bold">アプリに引き継ぐ</h1>
 				<p className="text-sm leading-7 text-muted-foreground">
 					調整くん iOS アプリがインストールされていれば、このリンクを開いた時点でアプリが起動し、
-					ブラウザで作成した予定表の一覧がアプリに引き継がれます。
+					ブラウザで作成したイベントの一覧がアプリに引き継がれます。
 				</p>
 				<p className="text-sm leading-7 text-muted-foreground">
 					このページが表示されている場合は、アプリがインストールされていません。

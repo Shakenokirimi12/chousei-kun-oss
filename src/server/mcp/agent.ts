@@ -228,7 +228,8 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                 if (!allowed) return errorResult(TOO_MANY_ATTEMPTS);
 
                 const normalizedComment = comment || null;
-                const normalizedNotificationEmail = notificationEmail?.trim() ? notificationEmail.trim() : null;
+                // HTTP 側と同じく、通知を希望したときだけアドレスを保存する
+                const normalizedNotificationEmail = notifyOnFinalize && notificationEmail?.trim() ? notificationEmail.trim() : null;
                 if (notifyOnFinalize && !normalizedNotificationEmail) {
                     return errorResult("通知を受け取る場合は notificationEmail が必要です");
                 }
@@ -258,8 +259,10 @@ export class ChouseiMcpAgent extends McpAgent<Cloudflare.Env, State, McpProps> {
                             name: encName,
                             comment: encComment,
                             userId: userId ?? null,
-                            notifyOnFinalize: notifyOnFinalize ? 1 : 0,
-                            notificationEmail: encEmail,
+                            // 省略時は保存済みの通知設定を残す（HTTP 側と同じ）
+                            ...(notifyOnFinalize === undefined
+                                ? {}
+                                : { notifyOnFinalize: notifyOnFinalize ? 1 : 0, notificationEmail: encEmail }),
                         })
                         .where(eq(participants.id, participantId));
                 } else {
