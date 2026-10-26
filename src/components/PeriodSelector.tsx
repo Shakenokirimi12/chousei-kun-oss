@@ -83,9 +83,14 @@ export function PeriodSelector({
         onChange(nextPeriods);
         if (nextDates) setViewDates(nextDates);
     };
-    // 操作できなかった理由の案内。次に候補か日付が変わったら、もう古いので閉じる
+    // 操作できなかった理由の案内。次に候補か日付が変わったら、もう古いので閉じる。
+    // 何も変えていないので、直前の「元に戻す」が残っていればそのまま使えるようにしておく
     const showMessage = (message: string) => {
-        setNotice({ message, after: { periods: selectedPeriods, dates: viewDates } });
+        setNotice((prev) =>
+            prev?.undo
+                ? { ...prev, message }
+                : { message, after: { periods: selectedPeriods, dates: viewDates } },
+        );
     };
     const undoLastChange = () => {
         if (!notice?.undo) return;
