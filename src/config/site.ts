@@ -3,7 +3,7 @@ export const siteConfig = {
     description: "調整くんは、イベントの日程候補を作成し、参加者の出欠を集計して最適な日程を決めるためのスケジュール調整アプリです。",
     ui: {
         createEvent: {
-            title: "新しい予定表を作成",
+            title: "新しいイベントを作成",
             description: "候補となる日程を選択してください。",
         },
         responseEvent: {
