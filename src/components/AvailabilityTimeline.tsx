@@ -362,8 +362,13 @@ export const AvailabilityTimeline = memo(function AvailabilityTimeline({
                                         {(() => {
                                             const merged = busyByDate.get(dateStr) ?? [];
 
+                                            // 表示範囲は候補ぎりぎりまでなので、範囲外の予定は切り詰め、
+                                            // 完全に外れるものは描かない（はみ出してヘッダー裏や余白に出るのを防ぐ）
                                             return merged.map((ev, j) => {
-                                                const style = getBlockStyle(ev.startMin, ev.endMin, zoomLevel, viewStartMin);
+                                                const startMin = Math.max(ev.startMin, viewStartMin);
+                                                const endMin = Math.min(ev.endMin, viewEndMin);
+                                                if (endMin <= startMin) return null;
+                                                const style = getBlockStyle(startMin, endMin, zoomLevel, viewStartMin);
                                                 return (
                                                     <div
                                                         key={`busy-${j}`}
