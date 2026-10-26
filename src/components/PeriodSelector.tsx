@@ -72,18 +72,31 @@ export function PeriodSelector({
     const [recurrenceCount, setRecurrenceCount] = React.useState(4);
     // 操作の結果を知らせる一行メッセージ。まとめて変える操作（コピー・日付の解除・1日分の解除）は
     // 確認ダイアログを挟まない代わりに、直前の状態に戻せるようにする。
-    const [notice, setNotice] = React.useState<{ message: string; undo?: { periods: string[]; dates: Date[] } } | null>(null);
+    type Snapshot = { periods: string[]; dates: Date[]; focused: Date | null };
+    const [notice, setNotice] = React.useState<{ message: string; undo?: Snapshot; after?: { periods: string[]; dates: Date[] } } | null>(null);
     const changeWithUndo = (message: string, nextPeriods: string[], nextDates?: Date[]) => {
-        setNotice({ message, undo: { periods: selectedPeriods, dates: viewDates } });
+        setNotice({
+            message,
+            undo: { periods: selectedPeriods, dates: viewDates, focused: focusedDate },
+            after: { periods: nextPeriods, dates: nextDates ?? viewDates },
+        });
         onChange(nextPeriods);
         if (nextDates) setViewDates(nextDates);
     };
     const undoLastChange = () => {
         if (!notice?.undo) return;
         setViewDates(notice.undo.dates);
+        setFocusedDate(notice.undo.focused);
         onChange(notice.undo.periods);
         setNotice(null);
     };
+    // 「元に戻す」は直前の操作だけを取り消す。その後に別の変更が入ったら、
+    // 巻き戻すとその変更まで消えてしまうので、取り消しの案内ごと閉じる。
+    React.useEffect(() => {
+        if (notice?.after && (notice.after.periods !== selectedPeriods || notice.after.dates !== viewDates)) {
+            setNotice(null);
+        }
+    }, [notice, selectedPeriods, viewDates]);
 
     // Synchronize viewDates with selectedPeriods (for AI additions)
     React.useEffect(() => {
@@ -165,10 +178,12 @@ export function PeriodSelector({
     // 少し上までスクロールしておく。最初の1回だけで、以降は利用者のスクロールを尊重する。
     const timelineViewportRef = React.useRef<HTMLDivElement>(null);
     const didInitialScrollRef = React.useRef(false);
+    const scrolledWithCandidatesRef = React.useRef(false);
     React.useEffect(() => {
-        if (didInitialScrollRef.current) return;
         const viewport = timelineViewportRef.current;
         if (!viewport) return;
+        // 下書きの復元などで候補が後から入ったときは、その候補が見えていなければもう一度だけ合わせる
+        if (didInitialScrollRef.current && (scrolledWithCandidatesRef.current || selectedPeriods.length === 0)) return;
         const startMinutes = selectedPeriods
             .map((p) => {
                 const [, slot] = p.split("_");
@@ -179,8 +194,13 @@ export function PeriodSelector({
             .filter((m): m is number => m !== null);
         const firstPeriodStart = CUSTOM_PERIODS[0] ? getSlotInfo("P", CUSTOM_PERIODS[0].id)?.startMin : undefined;
         const target = startMinutes.length > 0 ? Math.min(...startMinutes) : (firstPeriodStart ?? 9 * 60);
-        viewport.scrollTop = Math.max(0, (target - 30 - START_MINUTES) * PIXELS_PER_MINUTE);
+        const targetTop = (target - START_MINUTES) * PIXELS_PER_MINUTE;
+        const isVisible = targetTop >= viewport.scrollTop && targetTop <= viewport.scrollTop + viewport.clientHeight - 64;
+        if (!didInitialScrollRef.current || !isVisible) {
+            viewport.scrollTop = Math.max(0, targetTop - 30 * PIXELS_PER_MINUTE);
+        }
         didInitialScrollRef.current = true;
+        if (startMinutes.length > 0) scrolledWithCandidatesRef.current = true;
     });
 
     // Helper to get exact slot info
@@ -615,9 +635,9 @@ export function PeriodSelector({
             </div>
 
             {/* Right Main Area: Timeline */}
-            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-[75dvh] md:h-full overflow-hidden">
+            <div className="flex-1 min-w-0 rounded-md border bg-background shadow-sm flex flex-col min-h-0 relative h-[75dvh] md:h-full overflow-hidden isolate">
 
-                <ScrollArea className="flex-1 w-full h-full overscroll-contain" viewportRef={timelineViewportRef}>
+                <ScrollArea className="flex-1 w-full h-full md:overscroll-contain" viewportRef={timelineViewportRef}>
                     {/* Horizontal Scroll Wrapper */}
                     <div className="min-w-full w-fit">
                         {/* 1. Header Row (Sticky Top) */}
@@ -639,7 +659,8 @@ export function PeriodSelector({
                                                 key={date.toISOString()}
                                                 onClick={() => setFocusedDate(date)}
                                                 className={cn(
-                                                    "flex-none border-r w-[120px] flex flex-col items-center justify-center p-1 cursor-pointer transition-colors relative h-16 group/header",
+                                                    // 右上のコピーボタンと日付が重ならないよう、右側を空けて中央寄せする
+                                                    "flex-none border-r w-[120px] flex flex-col items-center justify-center p-1 pr-8 cursor-pointer transition-colors relative h-16 group/header",
                                                     isFocused
                                                         ? "bg-primary/10 text-primary border-b-2 border-b-primary"
                                                         : "bg-background/50 hover:bg-muted/50 text-muted-foreground"
@@ -654,7 +675,7 @@ export function PeriodSelector({
                                                     type="button"
                                                     variant="ghost"
                                                     size="icon"
-                                                    className="absolute top-1 right-1 w-6 h-6 opacity-100"
+                                                    className="absolute top-1 right-1 w-7 h-7 opacity-100"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         copyDaySelections(format(date, "yyyy-MM-dd"));
