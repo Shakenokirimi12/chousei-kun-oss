@@ -50,6 +50,10 @@ export function AllDayRangeSelector({
     // 直前の(却下された)選択のまま残らないよう、key変更で強制的に作り直す。
     const [calendarResetKey, setCalendarResetKey] = React.useState(0);
     const [chipNotice, setChipNotice] = React.useState<string | null>(null);
+    // 候補が変わったら（範囲の選び直し・土日の出し入れも含む）注意は役目を終えている
+    React.useEffect(() => {
+        setChipNotice(null);
+    }, [selected]);
 
     // 選択中候補から表示用の範囲(最小日〜最大日)を導出する
     const selectedDates = React.useMemo(
@@ -104,10 +108,8 @@ export function AllDayRangeSelector({
                 setChipNotice("候補は1日以上必要です。この日を外すときは、先に別の日を候補に戻してください。");
                 return;
             }
-            setChipNotice(null);
             onChange(selected.filter((c) => c !== candidate));
         } else {
-            setChipNotice(null);
             onChange([...selected, candidate].sort());
         }
     };
@@ -141,7 +143,11 @@ export function AllDayRangeSelector({
         );
         if (hasActiveWeekend) {
             const next = selected.filter((c) => !weekendCandidates.has(c));
-            if (next.length === 0) return; // 全日除外は不可
+            if (next.length === 0) {
+                // 全日除外は不可
+                setChipNotice("土日を除くと候補が1日も残りません。平日を候補に入れてから除外してください。");
+                return;
+            }
             onChange(next);
         } else {
             onChange([...new Set([...selected, ...weekendCandidates])].sort());

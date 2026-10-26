@@ -430,7 +430,8 @@ export function PeriodSelector({
             {notice ? (
                 <div
                     role="status"
-                    className="fixed bottom-4 left-1/2 z-[60] flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center gap-3 rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
+                    // 次の画面のモーダル（z-50）より下に置き、モーダルを開いたら背景に隠れるようにする
+                    className="fixed bottom-4 left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-md -translate-x-1/2 items-center gap-3 rounded-md border bg-popover px-3 py-2 text-sm text-popover-foreground shadow-lg"
                 >
                     <span className="flex-1">{notice.message}</span>
                     {notice.undo ? (

@@ -454,8 +454,8 @@ export function EventForm() {
         // 旧実装はモーダル(setFeedback)でコピー成功を通知していたが画面を遮るため、
         // 各 URL ボタンに inline で状態を持たせるよう変更した（下記 UrlShareCard）。
 
-        // 作成ページは h-dvh overflow-hidden（タイムライン編集用の全画面レイアウト）なので、
-        // 完了画面はこの中で自前でスクロールさせる。させないとスマホで管理用 URL が見切れる。
+        // PC の作成ページは h-dvh overflow-hidden（タイムライン編集用の1画面レイアウト）なので、
+        // 完了画面はこの中で自前でスクロールさせる。させないと背の低い画面で管理用 URL が見切れる。
         return (
             <div className="w-full flex-1 min-h-0 overflow-y-auto animate-in fade-in zoom-in-95 duration-500">
                 <Card className="border-2 border-primary/20 bg-card/50 backdrop-blur-md shadow-2xl overflow-hidden">
