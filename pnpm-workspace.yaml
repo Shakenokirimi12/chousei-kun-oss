@@ -5,3 +5,11 @@ allowBuilds:
   sharp: false
   unrs-resolver: false
   workerd: true
+# Patched versions for vulnerable transitive deps that their parents pin (pnpm audit --prod).
+# Remove each entry once the parent package ships the fix itself.
+overrides:
+  "hono@<4.12.25": "^4.12.25"
+  "glob@>=10 <10.5.0": "^10.5.0"
+  "fast-xml-parser@<5.5.6": "^5.5.6"
+  "sharp@<0.35.5": "^0.35.5"
+  "undici@>=7 <7.30.1": "^7.30.1"
