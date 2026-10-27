@@ -8,7 +8,7 @@ import { PeriodSelector, CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/Perio
 import { AllDayRangeSelector } from "@/components/AllDayRangeSelector";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { isAllDayEvent } from "@/lib/candidates";
+import { isAllDayEvent, allDayEventDateRange } from "@/lib/candidates";
 import { Loader2, Check, Copy, ExternalLink, ArrowRight, X as XIcon } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -38,6 +38,55 @@ type CalendarBusyEvent = {
     start?: string | Date;
     end?: string | Date;
 };
+
+const JST_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" });
+
+// iCal and Campus Square send all-day dates as JST midnight in UTC ISO form
+// ("...T15:00:00.000Z" of the previous day). allDayEventDateRange reads the leading
+// "YYYY-MM-DD" as is, so read the date in JST, independent of the browser timezone.
+function toAllDayDateStr(raw: string): string {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? "" : JST_DATE_FORMAT.format(d);
+}
+
+// A malformed feed can carry an all-day event spanning years. Cap the span so expanding
+// it into per-day blocks stays cheap.
+const MAX_ALL_DAY_SPAN_DAYS = 366;
+
+// All-day events listed up front when importing: the same span as the Google Calendar
+// fetch in src/server/api/routes/google.ts.
+const ALL_DAY_CHOICE_WINDOW_MS = 1000 * 60 * 60 * 24 * 120;
+
+type ImportedBusyEvent = { start: string; end: string; summary: string; allDay: boolean };
+
+function isSameBusyEvent(a: ImportedBusyEvent, b: ImportedBusyEvent): boolean {
+    return a.allDay === b.allDay && a.start === b.start && a.end === b.end && a.summary === b.summary;
+}
+
+/** Normalizes an all-day event to JST "YYYY-MM-DD" dates with an exclusive, capped end. */
+function normalizeAllDayEvent(ev: ImportedBusyEvent): ImportedBusyEvent | null {
+    const start = toAllDayDateStr(ev.start);
+    if (!start) return null;
+    const startDay = new Date(`${start}T00:00:00`);
+    const minEnd = new Date(startDay);
+    minEnd.setDate(minEnd.getDate() + 1);
+    const maxEnd = new Date(startDay);
+    maxEnd.setDate(maxEnd.getDate() + MAX_ALL_DAY_SPAN_DAYS);
+    let end = toAllDayDateStr(ev.end);
+    if (!end || end <= start) end = format(minEnd, "yyyy-MM-dd");
+    if (end > format(maxEnd, "yyyy-MM-dd")) end = format(maxEnd, "yyyy-MM-dd");
+    return { ...ev, start, end };
+}
+
+/** "11/3(火)" or "11/3(火)〜11/5(木)" for a normalized all-day event (end is exclusive). */
+function formatAllDayRange(ev: ImportedBusyEvent): string {
+    const start = new Date(`${ev.start}T00:00:00`);
+    const last = new Date(`${ev.end}T00:00:00`);
+    last.setDate(last.getDate() - 1);
+    const startLabel = format(start, "M/d(E)", { locale: ja });
+    return last > start ? `${startLabel}〜${format(last, "M/d(E)", { locale: ja })}` : startLabel;
+}
 
 /**
  * 共有用 URL のカード。コピー結果をボタン上でインライン表示する。
@@ -172,7 +221,34 @@ export function EventForm() {
         return () => window.removeEventListener("beforeunload", handleBeforeUnload);
     }, [selectedPeriods, title]);
 
-    const [universityBusyEvents, setUniversityBusyEvents] = React.useState<{ start: string; end: string; summary: string }[]>([]);
+    // Holds timed events plus only the all-day events the organizer chose to reflect.
+    const [universityBusyEvents, setUniversityBusyEvents] = React.useState<ImportedBusyEvent[]>([]);
+    // All-day entries are often holidays, birthdays, or reminders that do not block a
+    // meeting, so the organizer picks which ones to reflect when importing.
+    const [allDayChoice, setAllDayChoice] = React.useState<{
+        events: ImportedBusyEvent[];
+        selected: boolean[];
+        timedCount: number;
+        /** Events are sorted by date; the first nearCount fall within ALL_DAY_CHOICE_WINDOW_MS. */
+        nearCount: number;
+        showAll: boolean;
+    } | null>(null);
+    // Mirrors universityBusyEvents synchronously so an import can tell how many events
+    // were actually new before React applies the state update.
+    const busyEventsRef = React.useRef<ImportedBusyEvent[]>([]);
+
+    const visibleBusyEvents = React.useMemo(() => {
+        return universityBusyEvents.flatMap((ev) => {
+            if (!ev.allDay) return [ev];
+            // Expand to local midnight-to-midnight blocks so every covered day is marked in full.
+            return allDayEventDateRange(ev.start, ev.end).map((dateStr) => {
+                const start = new Date(`${dateStr}T00:00:00`);
+                const end = new Date(start);
+                end.setDate(end.getDate() + 1);
+                return { ...ev, start: start.toISOString(), end: end.toISOString() };
+            });
+        });
+    }, [universityBusyEvents]);
 
     const mapEventsToPeriods = React.useCallback((events: CalendarBusyEvent[]) => {
         const newBusyPeriods: string[] = [];
@@ -180,7 +256,9 @@ export function EventForm() {
         events.forEach(event => {
             const startDate = new Date(event.dtstart || event.start || "");
             const endDate = new Date(event.dtend || event.end || "");
-            const dateStr = startDate.toISOString().split("T")[0];
+            // Local date: the slots below are built with local setHours, and a UTC date
+            // would shift events before 9:00 JST onto the previous day.
+            const dateStr = format(startDate, "yyyy-MM-dd");
 
             const checkOverlap = (startA: Date, endA: Date, startB: Date, endB: Date) => {
                 return startA < endB && endA > startB;
@@ -216,8 +294,8 @@ export function EventForm() {
     }, []);
 
     const busyPeriodIds = React.useMemo(() => {
-        return mapEventsToPeriods(universityBusyEvents);
-    }, [universityBusyEvents, mapEventsToPeriods]);
+        return mapEventsToPeriods(visibleBusyEvents);
+    }, [visibleBusyEvents, mapEventsToPeriods]);
 
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const ENABLE_CAMPUS_SQUARE = process.env.NEXT_PUBLIC_ENABLE_CAMPUS_SQUARE === 'true';
@@ -229,6 +307,80 @@ export function EventForm() {
     });
 
     const closeFeedback = () => setFeedback(prev => ({ ...prev, isOpen: false }));
+
+    /** Adds events not reflected yet and returns how many were new. */
+    const mergeBusyEvents = React.useCallback((newEvents: ImportedBusyEvent[]) => {
+        const added: ImportedBusyEvent[] = [];
+        newEvents.forEach(ne => {
+            if (![...busyEventsRef.current, ...added].some(p => isSameBusyEvent(p, ne))) added.push(ne);
+        });
+        if (added.length > 0) {
+            busyEventsRef.current = [...busyEventsRef.current, ...added];
+            setUniversityBusyEvents(busyEventsRef.current);
+        }
+        return added.length;
+    }, []);
+
+    const showImportResult = React.useCallback((timedCount: number, allDayCount: number) => {
+        setFeedback({
+            title: "インポート成功",
+            message: timedCount + allDayCount === 0
+                ? "反映する予定はありませんでした。"
+                : [
+                    `${timedCount + allDayCount}件の予定を反映しました。これらは赤色で表示されます。`,
+                    allDayCount > 0 && `うち${allDayCount}件は終日の予定で、その日を一日中「予定あり」にしています。`,
+                ].filter(Boolean).join(""),
+            isOpen: true
+        });
+    }, []);
+
+    const addImportedBusyEvents = React.useCallback(
+        (events: { dtstart: string; dtend: string; summary?: string; allDay?: boolean }[]) => {
+            const newEvents: ImportedBusyEvent[] = events.map(ev => ({
+                start: ev.dtstart,
+                end: ev.dtend,
+                summary: ev.summary || "予定あり",
+                allDay: !!ev.allDay,
+            }));
+            const timedAdded = mergeBusyEvents(newEvents.filter(ev => !ev.allDay));
+
+            // Past days cannot be candidates, so only ask about all-day events still ahead
+            // that are not reflected yet.
+            const today = JST_DATE_FORMAT.format(new Date());
+            const allDayEvents = newEvents
+                .filter(ev => ev.allDay)
+                .map(normalizeAllDayEvent)
+                .filter((ev): ev is ImportedBusyEvent => ev !== null && ev.end > today)
+                .filter((ev, i, arr) => arr.findIndex(other => isSameBusyEvent(other, ev)) === i)
+                .filter(ev => !busyEventsRef.current.some(p => isSameBusyEvent(p, ev)))
+                .sort((a, b) => a.start.localeCompare(b.start));
+
+            if (allDayEvents.length === 0) {
+                showImportResult(timedAdded, 0);
+                return;
+            }
+            // Feeds such as holiday calendars span years. List the window the Google import
+            // also covers first, and leave the rest behind a button.
+            const horizon = JST_DATE_FORMAT.format(new Date(Date.now() + ALL_DAY_CHOICE_WINDOW_MS));
+            const nearCount = allDayEvents.filter(ev => ev.start <= horizon).length;
+            setAllDayChoice({
+                events: allDayEvents,
+                selected: allDayEvents.map(() => false),
+                timedCount: timedAdded,
+                nearCount,
+                showAll: nearCount === 0,
+            });
+        },
+        [mergeBusyEvents, showImportResult]
+    );
+
+    const finishAllDayChoice = (apply: boolean) => {
+        if (!allDayChoice) return;
+        const chosen = apply ? allDayChoice.events.filter((_, i) => allDayChoice.selected[i]) : [];
+        const allDayAdded = mergeBusyEvents(chosen);
+        setAllDayChoice(null);
+        showImportResult(allDayChoice.timedCount, allDayAdded);
+    };
 
     const handleCampusSquareImport = async (uid: string, pass: string) => {
         if (!ENABLE_CAMPUS_SQUARE) return;
@@ -244,27 +396,8 @@ export function EventForm() {
             throw new Error(error.error || "インポートに失敗しました");
         }
 
-        const data = await res.json() as { events: { dtstart: string, dtend: string, summary: string }[] };
-        const newEvents = data.events.map(ev => ({
-            start: ev.dtstart,
-            end: ev.dtend,
-            summary: ev.summary || "予定あり"
-        }));
-
-        setUniversityBusyEvents(prev => {
-            const next = [...prev];
-            newEvents.forEach(ne => {
-                if (!next.some(p => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
-                    next.push(ne);
-                }
-            });
-            return next;
-        });
-        setFeedback({
-            title: "インポート成功",
-            message: `${data.events.length}件の予定をインポートしました。これらは赤色で表示されます。`,
-            isOpen: true
-        });
+        const data = await res.json() as { events: { dtstart: string, dtend: string, summary: string, allDay?: boolean }[] };
+        addImportedBusyEvents(data.events);
     }
 
     const handleICalImport = async (url: string) => {
@@ -280,27 +413,8 @@ export function EventForm() {
                 throw new Error(error.error || "インポートに失敗しました");
             }
 
-            const data = await res.json() as { events: { dtstart: string, dtend: string, summary?: string }[] };
-            const newEvents = data.events.map(ev => ({
-                start: ev.dtstart,
-                end: ev.dtend,
-                summary: ev.summary || "予定あり"
-            }));
-
-            setUniversityBusyEvents(prev => {
-                const next = [...prev];
-                newEvents.forEach(ne => {
-                    if (!next.some(p => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
-                        next.push(ne);
-                    }
-                });
-                return next;
-            });
-            setFeedback({
-                title: "インポート成功",
-                message: `${data.events.length}件の予定をインポートしました。これらは赤色で表示されます。`,
-                isOpen: true
-            });
+            const data = await res.json() as { events: { dtstart: string, dtend: string, summary?: string, allDay?: boolean }[] };
+            addImportedBusyEvents(data.events);
         } catch (error) {
             setFeedback({
                 title: "エラー",
@@ -331,27 +445,8 @@ export function EventForm() {
                 });
                 return;
             }
-            const data = (await res.json()) as { events: { dtstart: string; dtend: string; summary?: string }[] };
-            const newEvents = data.events.map(ev => ({
-                start: ev.dtstart,
-                end: ev.dtend,
-                summary: ev.summary || "予定あり"
-            }));
-
-            setUniversityBusyEvents(prev => {
-                const next = [...prev];
-                newEvents.forEach(ne => {
-                    if (!next.some(p => p.start === ne.start && p.end === ne.end && p.summary === ne.summary)) {
-                        next.push(ne);
-                    }
-                });
-                return next;
-            });
-            setFeedback({
-                title: "インポート成功",
-                message: `${data.events.length}件の予定をインポートしました。これらは赤色で表示されます。`,
-                isOpen: true
-            });
+            const data = (await res.json()) as { events: { dtstart: string; dtend: string; summary?: string; allDay?: boolean }[] };
+            addImportedBusyEvents(data.events);
         } catch (e) {
             console.error(e);
             setFeedback({
@@ -362,7 +457,7 @@ export function EventForm() {
         } finally {
             setIsGoogleImporting(false);
         }
-    }, []);
+    }, [addImportedBusyEvents]);
 
     React.useEffect(() => {
         const url = new URL(window.location.href);
@@ -600,7 +695,7 @@ export function EventForm() {
                                 selectedPeriods={selectedPeriods}
                                 onChange={setSelectedPeriods}
                                 busyPeriodIds={busyPeriodIds}
-                                busyEvents={universityBusyEvents}
+                                busyEvents={visibleBusyEvents}
                             />
                         ) : (
                             <AllDayRangeSelector
@@ -611,6 +706,64 @@ export function EventForm() {
                     </div>
                 </div>
             </div>
+
+            <Dialog open={allDayChoice !== null} onOpenChange={(open) => { if (!open) finishAllDayChoice(false); }}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>終日の予定を反映しますか</DialogTitle>
+                        <DialogDescription>
+                            チェックした予定は、その日を一日中「予定あり」として赤く表示します。祝日など、候補選びに関係ない予定はチェックしないでください。
+                        </DialogDescription>
+                    </DialogHeader>
+                    {allDayChoice && (
+                        <ul className="max-h-72 overflow-y-auto rounded-md border divide-y">
+                            {allDayChoice.events.slice(0, allDayChoice.showAll ? undefined : allDayChoice.nearCount).map((ev, i) => (
+                                <li key={`${ev.start}|${ev.end}|${ev.summary}`}>
+                                    <label className="flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-muted/50">
+                                        <input
+                                            type="checkbox"
+                                            className="h-4 w-4 shrink-0 accent-primary"
+                                            checked={allDayChoice.selected[i]}
+                                            onChange={(e) => {
+                                                const selected = [...allDayChoice.selected];
+                                                selected[i] = e.target.checked;
+                                                setAllDayChoice({ ...allDayChoice, selected });
+                                            }}
+                                        />
+                                        <span className="w-24 shrink-0 tabular-nums text-muted-foreground">{formatAllDayRange(ev)}</span>
+                                        <span className="min-w-0 break-words">{ev.summary}</span>
+                                    </label>
+                                </li>
+                            ))}
+                            {!allDayChoice.showAll && allDayChoice.nearCount < allDayChoice.events.length && (
+                                <li>
+                                    <button
+                                        type="button"
+                                        className="w-full px-3 py-2 text-sm text-primary hover:bg-muted/50"
+                                        onClick={() => setAllDayChoice({ ...allDayChoice, showAll: true })}
+                                    >
+                                        さらに先の予定も表示（{allDayChoice.events.length - allDayChoice.nearCount}件）
+                                    </button>
+                                </li>
+                            )}
+                        </ul>
+                    )}
+                    <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2">
+                        <Button type="button" variant="outline" onClick={() => finishAllDayChoice(false)}>
+                            終日の予定は反映しない
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={() => finishAllDayChoice(true)}
+                            disabled={!allDayChoice?.selected.some(Boolean)}
+                        >
+                            {allDayChoice?.selected.some(Boolean)
+                                ? `選んだ${allDayChoice.selected.filter(Boolean).length}件を反映`
+                                : "反映する予定を選んでください"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Input Modal */}
             <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
