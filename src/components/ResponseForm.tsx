@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input";
 import { CUSTOM_PERIODS, HOURLY_SLOTS } from "./PeriodSelector";
 import { AvailabilityTimeline } from "@/components/AvailabilityTimeline";
 import { DailyAvailabilityList } from "@/components/DailyAvailabilityList";
-import { isAllDayEvent as areAllDayCandidates, isAllDayCandidate, parseDateOnly, UNANSWERED } from "@/lib/candidates";
+import { isAllDayEvent as areAllDayCandidates, isAllDayCandidate, UNANSWERED } from "@/lib/candidates";
+import { allDayEventCovers, expandAllDayToBlocks, normalizeAllDayEvent, type AllDayEventRange } from "@/lib/allDayEvents";
+import { AllDayEventChoiceDialog } from "@/components/AllDayEventChoiceDialog";
 import { format } from "date-fns";
-import { ja } from "date-fns/locale";
 import { X, Triangle, Circle, Loader2 } from "lucide-react";
 import { siteConfig } from "@/config/site";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -46,6 +47,22 @@ interface RawImportedEvent {
 
 const EXCLUDED_ICAL_URLS = ["https://csweb.u-aizu.ac.jp/calendar/AcademicCalendar-student-E.ics", "https://csweb.u-aizu.ac.jp/calendar/AcademicCalendar-student-J.ics"];
 
+function isAllDayRawEvent(event: RawImportedEvent): boolean {
+  if (event.allDay === true) return true;
+  const startRaw = event.dtstart ?? event.start;
+  const endRaw = event.dtend ?? event.end;
+  if (!startRaw || !endRaw) return false;
+  // Typical all-day representation from Google/GAS:
+  // start: "YYYY-MM-DD", end: "YYYY-MM-DD" (exclusive end)
+  return /^\d{4}-\d{2}-\d{2}$/.test(startRaw) && /^\d{4}-\d{2}-\d{2}$/.test(endRaw);
+}
+
+type BusyEvent = { start: string; end: string; summary: string; source: string; allDay: boolean };
+
+function isSameAllDayEvent(a: AllDayEventRange, b: AllDayEventRange): boolean {
+  return a.start === b.start && a.end === b.end && a.summary === b.summary;
+}
+
 export function ResponseForm({ eventId, candidates, participants, allAvailabilities, onSuccess }: ResponseFormProps) {
   const router = useRouter();
   // 「日毎の出欠確認」イベント（全候補が終日形式）かどうか
@@ -53,9 +70,18 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
   const { userId } = useUser();
   const [name, setName] = React.useState("");
   const [comment, setComment] = React.useState("");
-  const [showAllDayDialog, setShowAllDayDialog] = React.useState(false);
-  const [pendingGoogleEvents, setPendingGoogleEvents] = React.useState<RawImportedEvent[]>([]);
-  const [pendingAllDayDates, setPendingAllDayDates] = React.useState<string[]>([]);
+  // All-day events found on an import wait here until the user picks which to reflect.
+  // Queued per import, so a second import finishing while the dialog is open waits its turn.
+  const [allDayChoices, setAllDayChoices] = React.useState<{
+    key: number;
+    events: AllDayEventRange[];
+    timed: BusyEvent[];
+    source: string;
+  }[]>([]);
+  const allDayChoiceKeyRef = React.useRef(0);
+  // Events waiting in the queue. An identical event (same dates and name) from a concurrent
+  // import is not asked again, even from another calendar: the choice is about the event itself.
+  const queuedAllDayRef = React.useRef<AllDayEventRange[]>([]);
   // 未回答(-1)で始める。○で始めると、スマホで画面外にある候補を見ないまま送ったときに
   // 「全部参加できる」と集計されてしまう。未回答が残っている間は送信できない。
   const [availabilities, setAvailabilities] = React.useState<number[]>(
@@ -83,132 +109,6 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     return EXCLUDED_ICAL_URLS.some((url) => fieldsToCheck.some((value) => value.includes(url)));
   }, []);
 
-  const isAllDayEvent = React.useCallback((event: RawImportedEvent) => {
-    if (event?.allDay === true) return true;
-    const startRaw = event?.dtstart ?? event?.start;
-    const endRaw = event?.dtend ?? event?.end;
-    if (!startRaw || !endRaw) return false;
-
-    // Typical all-day representation from Google/GAS:
-    // start: "YYYY-MM-DD", end: "YYYY-MM-DD" (exclusive end)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(startRaw) && /^\d{4}-\d{2}-\d{2}$/.test(endRaw)) {
-      return true;
-    }
-    return false;
-  }, []);
-
-  const parseCandidateForConflict = React.useCallback((candidate: string) => {
-    const [datePart, slotId] = candidate.split("_");
-    const date = new Date(datePart);
-
-    let period = null;
-    const type = slotId.charAt(0);
-    const id = parseInt(slotId.substring(1));
-
-    if (type === "D") {
-      // 終日候補: 時間帯を持たない（時間ベースの重複判定はスキップされる）
-      return { date, period: null };
-    } else if (type === "P") {
-      period = CUSTOM_PERIODS.find((p) => p.id === id);
-    } else if (type === "H") {
-      period = HOURLY_SLOTS.find((h) => h.id === id);
-    } else {
-      const pid = parseInt(slotId);
-      period = CUSTOM_PERIODS.find((p) => p.id === pid);
-    }
-
-    return { date, period };
-  }, []);
-
-  const applyGoogleConflicts = React.useCallback(
-    (events: RawImportedEvent[], applyAllDay: boolean) => {
-      setAvailabilities((prevAvailabilities) => {
-        const nextAvailabilities = [...prevAvailabilities];
-        let conflictCount = 0;
-
-        candidates.forEach((candidate, idx) => {
-          const { date: cDate, period: cPeriod } = parseCandidateForConflict(candidate);
-          // 終日候補は時間帯を持たないため、終日予定との重なりのみ判定する。
-          // 時間指定の予定1件で「その日にいない」ことにはならない。
-          const isDayCandidate = isAllDayCandidate(candidate);
-          if (!cPeriod && !isDayCandidate) return;
-
-          let cStart: Date | null = null;
-          let cEnd: Date | null = null;
-          if (cPeriod) {
-            const [startH, startM] = cPeriod.time.split("-")[0].split(":").map(Number);
-            const [endH, endM] = cPeriod.time.split("-")[1].split(":").map(Number);
-            cStart = new Date(cDate);
-            cStart.setHours(startH, startM, 0, 0);
-            cEnd = new Date(cDate);
-            cEnd.setHours(endH, endM, 0, 0);
-          }
-
-          const candidateDay = new Date(cDate);
-          candidateDay.setHours(0, 0, 0, 0);
-
-          const hasConflict = events.some((ev) => {
-            if (isAllDayEvent(ev)) {
-              if (!applyAllDay) return false;
-              const startRaw = ev.dtstart ?? ev.start;
-              const endRaw = ev.dtend ?? ev.end;
-              const startDay = parseDateOnly(startRaw);
-              let endDay = parseDateOnly(endRaw); // exclusive end
-              if (!startDay) return false;
-
-              // まれに end が欠落/同日になる予定があるため、最低1日分は反映する
-              if (!endDay || endDay <= startDay) {
-                endDay = new Date(startDay);
-                endDay.setDate(startDay.getDate() + 1);
-              }
-              return candidateDay >= startDay && candidateDay < endDay;
-            }
-
-            if (!cStart || !cEnd) return false;
-            const eStart = new Date(ev.dtstart || ev.start || "");
-            const eEnd = new Date(ev.dtend || ev.end || "");
-            return cStart < eEnd && cEnd > eStart;
-          });
-
-          if (hasConflict) {
-            nextAvailabilities[idx] = 0; // Mark as X
-            conflictCount++;
-          }
-        });
-
-        setFeedback({
-          title: "Googleカレンダー連携成功",
-          message: `${conflictCount}件の重複スロットを自動的に「×」に設定しました。`,
-          isOpen: true,
-        });
-
-        return nextAvailabilities;
-      });
-    },
-    [candidates, parseCandidateForConflict, isAllDayEvent],
-  );
-
-  const hasAllDayOverlapWithCandidates = React.useCallback(
-    (event: RawImportedEvent) => {
-      const startRaw = event?.dtstart ?? event?.start;
-      const endRaw = event?.dtend ?? event?.end;
-      const startDay = parseDateOnly(startRaw);
-      let endDay = parseDateOnly(endRaw); // exclusive end
-      if (!startDay) return false;
-      if (!endDay || endDay <= startDay) {
-        endDay = new Date(startDay);
-        endDay.setDate(startDay.getDate() + 1);
-      }
-
-      return candidates.some((candidate) => {
-        const { date } = parseCandidateForConflict(candidate);
-        const candidateDay = new Date(date);
-        candidateDay.setHours(0, 0, 0, 0);
-        return candidateDay >= startDay && candidateDay < endDay;
-      });
-    },
-    [candidates, parseCandidateForConflict],
-  );
 
   // Calculate aggregated OK counts for each candidate slot
   const okCounts = React.useMemo(() => {
@@ -308,7 +208,13 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
   }, []);
 
   // source: 終日モードで「この日を×にした予定」を由来のカレンダーごとに表示するためのラベル
-  const [busyEvents, setBusyEvents] = React.useState<{ start: string; end: string; summary: string; source: string; allDay: boolean }[]>([]);
+  // All-day entries hold JST "YYYY-MM-DD" dates (end exclusive), as DailyAvailabilityList expects.
+  const [busyEvents, setBusyEvents] = React.useState<BusyEvent[]>([]);
+  // The timeline places events by clock time, so all-day entries become full-day blocks.
+  const timelineBusyEvents = React.useMemo(
+    () => busyEvents.flatMap((ev) => (ev.allDay ? expandAllDayToBlocks(ev).map((block) => ({ ...ev, ...block })) : [ev])),
+    [busyEvents],
+  );
 
   const handleCampusSquareImport = async (uid: string, pass: string) => {
     if (!ENABLE_CAMPUS_SQUARE) return;
@@ -359,19 +265,23 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
     }
   };
 
-  const applyImportedEvents = (events: { dtstart: string; dtend: string; summary?: string; allDay?: boolean }[], source: string) => {
-    // Populate busy events for display
-    const newEvents = events.map(ev => ({
-        start: ev.dtstart,
-        end: ev.dtend,
-        summary: ev.summary || "予定あり",
-        source,
-        allDay: !!ev.allDay,
-    }));
-
+  /** Reflects timed events plus the chosen all-day events, marking overlapping candidates as ×. */
+  const reflectImportedEvents = (timed: BusyEvent[], allDay: AllDayEventRange[], source: string) => {
+    // Only candidate days are shown, so record one day per covered candidate date instead of
+    // the whole span. A long event over far-apart candidates would otherwise be expanded day by day.
+    const candidateDates = Array.from(new Set(candidates.map((c) => c.split("_")[0])));
+    const allDayBusy: BusyEvent[] = allDay.flatMap((ev) =>
+      candidateDates
+        .filter((d) => allDayEventCovers(ev, d))
+        .map((d) => {
+          const next = new Date(`${d}T00:00:00`);
+          next.setDate(next.getDate() + 1);
+          return { start: d, end: format(next, "yyyy-MM-dd"), summary: ev.summary, source, allDay: true };
+        }),
+    );
     setBusyEvents((prev) => {
       const next = [...prev];
-      newEvents.forEach((ne) => {
+      [...timed, ...allDayBusy].forEach((ne) => {
         if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary && p.source === ne.source)) {
           next.push(ne);
         }
@@ -379,71 +289,71 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
       return next;
     });
 
-    // Conflict Detection
-    const newAvailabilities = [...availabilities];
-    let conflictCount = 0;
-
+    const conflicting = new Set<number>();
     candidates.forEach((candidate, idx) => {
-      const { date, period } = parseCandidate(candidate);
-      const isDayCandidate = isAllDayCandidate(candidate);
-      if (!period && !isDayCandidate) return;
-
-      const dateOnly = new Date(date);
-      dateOnly.setHours(0, 0, 0, 0);
-
+      const dateStr = candidate.split("_")[0];
+      const onBusyDay = allDay.some((ev) => allDayEventCovers(ev, dateStr));
       let hasConflict: boolean;
-      if (isDayCandidate) {
-        // 終日候補: 取り込んだ「終日予定」と重なる日だけ×にする。
+      if (isAllDayCandidate(candidate)) {
+        // 終日候補: 終日予定と重なる日だけ×にする。
         // 時間指定の予定は自動×にしない（その日にいるか、の判断は回答者に委ねる）。
-        hasConflict = events.some((ev) => {
-          if (!isAllDayEvent(ev)) return false;
-          const startDay = parseDateOnly(ev.dtstart);
-          let endDay = parseDateOnly(ev.dtend); // exclusive end
-          if (!startDay) return false;
-          if (!endDay || endDay <= startDay) {
-            endDay = new Date(startDay);
-            endDay.setDate(startDay.getDate() + 1);
-          }
-          return dateOnly >= startDay && dateOnly < endDay;
-        });
+        hasConflict = onBusyDay;
       } else {
-        const [startH, startM] = period!.time.split("-")[0].split(":").map(Number);
-        const [endH, endM] = period!.time.split("-")[1].split(":").map(Number);
-
-        const cStart = new Date(dateOnly);
+        const { period } = parseCandidate(candidate);
+        if (!period) return;
+        const [startH, startM] = period.time.split("-")[0].split(":").map(Number);
+        const [endH, endM] = period.time.split("-")[1].split(":").map(Number);
+        const cStart = new Date(`${dateStr}T00:00:00`);
         cStart.setHours(startH, startM, 0, 0);
-        const cEnd = new Date(dateOnly);
+        const cEnd = new Date(`${dateStr}T00:00:00`);
         cEnd.setHours(endH, endM, 0, 0);
-
-        // Check against each imported event
-        hasConflict = events.some((ev) => {
-          const eStart = new Date(ev.dtstart);
-          const eEnd = new Date(ev.dtend);
-          return cStart < eEnd && cEnd > eStart;
-        });
+        hasConflict = onBusyDay || timed.some((ev) => cStart < new Date(ev.end) && cEnd > new Date(ev.start));
       }
-
-      if (hasConflict) {
-        newAvailabilities[idx] = 0; // Mark as X
-        conflictCount++;
-      }
+      if (hasConflict) conflicting.add(idx);
     });
+    // Functional update: the Google import resumed after OAuth runs from a stale closure,
+    // and answers may change while a fetch is in flight.
+    setAvailabilities((prev) => prev.map((value, idx) => (conflicting.has(idx) ? 0 : value)));
+    const conflictCount = conflicting.size;
 
-    setAvailabilities(newAvailabilities);
+    setFeedback({
+      title: "インポート成功",
+      message: conflictCount > 0
+        ? `スケジュールをインポートしました。${conflictCount}件の重複スロットを「×」に設定しました。`
+        : "スケジュールをインポートしました。候補日程との重複はありませんでした。",
+      isOpen: true,
+    });
+  };
 
-    if (conflictCount > 0) {
-      setFeedback({
-        title: "インポート成功",
-        message: `スケジュールをインポートしました。${conflictCount}件の重複スロットを「×」に設定しました。`,
-        isOpen: true,
-      });
-    } else {
-      setFeedback({
-        title: "インポート成功",
-        message: "スケジュールをインポートしました。候補日程との重複はありませんでした。",
-        isOpen: true,
-      });
+  const applyImportedEvents = (events: RawImportedEvent[], source: string) => {
+    const timed: BusyEvent[] = events
+      .filter((ev) => !isAllDayRawEvent(ev))
+      .map((ev) => ({
+        start: ev.dtstart || ev.start || "",
+        end: ev.dtend || ev.end || "",
+        summary: ev.summary || "予定あり",
+        source,
+        allDay: false,
+      }));
+
+    // Holidays and reminders are usually all-day events, so ask which ones to reflect.
+    // Only events on a candidate day matter here.
+    const candidateDates = Array.from(new Set(candidates.map((c) => c.split("_")[0])));
+    const allDay = events
+      .filter(isAllDayRawEvent)
+      .map((ev) => normalizeAllDayEvent(ev.dtstart ?? ev.start, ev.dtend ?? ev.end, ev.summary || "予定あり"))
+      .filter((ev): ev is AllDayEventRange => ev !== null && candidateDates.some((d) => allDayEventCovers(ev, d)))
+      .filter((ev, i, arr) => arr.findIndex((o) => isSameAllDayEvent(o, ev)) === i)
+      .filter((ev) => !queuedAllDayRef.current.some((q) => isSameAllDayEvent(q, ev)))
+      .sort((a, b) => a.start.localeCompare(b.start));
+
+    if (allDay.length > 0) {
+      const key = ++allDayChoiceKeyRef.current;
+      queuedAllDayRef.current = [...queuedAllDayRef.current, ...allDay];
+      setAllDayChoices((prev) => [...prev, { key, events: allDay, timed, source }]);
+      return;
     }
+    reflectImportedEvents(timed, [], source);
   };
 
   const handleGoogleImport = async () => {
@@ -472,36 +382,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         events: RawImportedEvent[];
       };
       const events = (googleData.events || []).filter((ev) => !isExcludedCalendarEvent(ev));
-
-      // Populate busy events for display
-      const newEvents = events.map(ev => ({
-          start: ev.dtstart || ev.start || "",
-          end: ev.dtend || ev.end || "",
-          summary: ev.summary || "予定あり",
-          source: "Googleカレンダー",
-          allDay: !!ev.allDay,
-      }));
-
-      setBusyEvents((prev) => {
-        const next = [...prev];
-        newEvents.forEach((ne) => {
-          if (!next.some((p) => p.start === ne.start && p.end === ne.end && p.summary === ne.summary && p.source === ne.source)) {
-            next.push(ne);
-          }
-        });
-        return next;
-      });
-
-      const allDayEvents = events.filter((ev) => isAllDayEvent(ev) && hasAllDayOverlapWithCandidates(ev));
-      if (allDayEvents.length > 0) {
-        const allDayDates = Array.from(new Set(allDayEvents.map((ev) => String(ev.dtstart || ev.start))));
-        setPendingGoogleEvents(events);
-        setPendingAllDayDates(allDayDates as string[]);
-        setShowAllDayDialog(true);
-        return;
-      }
-
-      applyGoogleConflicts(events, false);
+      applyImportedEvents(events, "Googleカレンダー");
     } finally {
       setIsGoogleImporting(false);
     }
@@ -660,7 +541,7 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
                 availabilities={availabilities}
                 onStatusChange={handleStatusChange}
                 onDayStatusChange={handleDayStatusChange}
-                busyEvents={busyEvents}
+                busyEvents={timelineBusyEvents}
                 okCounts={okCounts}
               />
             )}
@@ -704,48 +585,19 @@ export function ResponseForm({ eventId, candidates, participants, allAvailabilit
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showAllDayDialog} onOpenChange={setShowAllDayDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>終日予定が見つかりました</DialogTitle>
-            <DialogDescription>
-              終日予定がある日: {pendingAllDayDates
-                .map((raw) => {
-                  const d = parseDateOnly(raw);
-                  return d ? format(d, "M/d(E)", { locale: ja }) : raw;
-                })
-                .join("、")}
-              <br />
-              これらの日は候補をすべて「×」にしますか？
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setShowAllDayDialog(false);
-                applyGoogleConflicts(pendingGoogleEvents, false);
-                setPendingGoogleEvents([]);
-                setPendingAllDayDates([]);
-              }}
-            >
-              終日予定は無視する
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                setShowAllDayDialog(false);
-                applyGoogleConflicts(pendingGoogleEvents, true);
-                setPendingGoogleEvents([]);
-                setPendingAllDayDates([]);
-              }}
-            >
-              該当日はすべて「×」にする
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {allDayChoices[0] && (
+        <AllDayEventChoiceDialog
+          key={allDayChoices[0].key}
+          events={allDayChoices[0].events}
+          description="チェックした予定の日は、候補をすべて「×」にします。祝日など、参加に関係ない予定はチェックしないでください。"
+          onDone={(chosen) => {
+            const { events, timed, source } = allDayChoices[0];
+            queuedAllDayRef.current = queuedAllDayRef.current.filter((q) => !events.includes(q));
+            setAllDayChoices((prev) => prev.slice(1));
+            reflectImportedEvents(timed, chosen, source);
+          }}
+        />
+      )}
     </div>
   );
 }
