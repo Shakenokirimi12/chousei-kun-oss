@@ -8,7 +8,9 @@ import { PeriodSelector, CUSTOM_PERIODS, HOURLY_SLOTS } from "@/components/Perio
 import { AllDayRangeSelector } from "@/components/AllDayRangeSelector";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { isAllDayEvent, allDayEventDateRange } from "@/lib/candidates";
+import { isAllDayEvent } from "@/lib/candidates";
+import { clipAllDayEvent, expandAllDayToBlocks, jstDateStr, normalizeAllDayEvent, type AllDayEventRange } from "@/lib/allDayEvents";
+import { AllDayEventChoiceDialog } from "@/components/AllDayEventChoiceDialog";
 import { Loader2, Check, Copy, ExternalLink, ArrowRight, X as XIcon } from "lucide-react";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -39,53 +41,17 @@ type CalendarBusyEvent = {
     end?: string | Date;
 };
 
-const JST_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo" });
-
-// iCal and Campus Square send all-day dates as JST midnight in UTC ISO form
-// ("...T15:00:00.000Z" of the previous day). allDayEventDateRange reads the leading
-// "YYYY-MM-DD" as is, so read the date in JST, independent of the browser timezone.
-function toAllDayDateStr(raw: string): string {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-    const d = new Date(raw);
-    return Number.isNaN(d.getTime()) ? "" : JST_DATE_FORMAT.format(d);
-}
-
-// A malformed feed can carry an all-day event spanning years. Cap the span so expanding
-// it into per-day blocks stays cheap.
-const MAX_ALL_DAY_SPAN_DAYS = 366;
-
 // All-day events listed up front when importing: the same span as the Google Calendar
 // fetch in src/server/api/routes/google.ts.
 const ALL_DAY_CHOICE_WINDOW_MS = 1000 * 60 * 60 * 24 * 120;
+// Longest stretch of one all-day event drawn on the calendar, counted from the first day
+// shown. Only events lasting over two years get cut.
+const ALL_DAY_MAX_DISPLAY_DAYS = 730;
 
 type ImportedBusyEvent = { start: string; end: string; summary: string; allDay: boolean };
 
 function isSameBusyEvent(a: ImportedBusyEvent, b: ImportedBusyEvent): boolean {
     return a.allDay === b.allDay && a.start === b.start && a.end === b.end && a.summary === b.summary;
-}
-
-/** Normalizes an all-day event to JST "YYYY-MM-DD" dates with an exclusive, capped end. */
-function normalizeAllDayEvent(ev: ImportedBusyEvent): ImportedBusyEvent | null {
-    const start = toAllDayDateStr(ev.start);
-    if (!start) return null;
-    const startDay = new Date(`${start}T00:00:00`);
-    const minEnd = new Date(startDay);
-    minEnd.setDate(minEnd.getDate() + 1);
-    const maxEnd = new Date(startDay);
-    maxEnd.setDate(maxEnd.getDate() + MAX_ALL_DAY_SPAN_DAYS);
-    let end = toAllDayDateStr(ev.end);
-    if (!end || end <= start) end = format(minEnd, "yyyy-MM-dd");
-    if (end > format(maxEnd, "yyyy-MM-dd")) end = format(maxEnd, "yyyy-MM-dd");
-    return { ...ev, start, end };
-}
-
-/** "11/3(火)" or "11/3(火)〜11/5(木)" for a normalized all-day event (end is exclusive). */
-function formatAllDayRange(ev: ImportedBusyEvent): string {
-    const start = new Date(`${ev.start}T00:00:00`);
-    const last = new Date(`${ev.end}T00:00:00`);
-    last.setDate(last.getDate() - 1);
-    const startLabel = format(start, "M/d(E)", { locale: ja });
-    return last > start ? `${startLabel}〜${format(last, "M/d(E)", { locale: ja })}` : startLabel;
 }
 
 /**
@@ -225,28 +191,31 @@ export function EventForm() {
     const [universityBusyEvents, setUniversityBusyEvents] = React.useState<ImportedBusyEvent[]>([]);
     // All-day entries are often holidays, birthdays, or reminders that do not block a
     // meeting, so the organizer picks which ones to reflect when importing.
-    const [allDayChoice, setAllDayChoice] = React.useState<{
-        events: ImportedBusyEvent[];
-        selected: boolean[];
+    // Queued per import, so a second import finishing while the dialog is open waits its turn.
+    const [allDayChoices, setAllDayChoices] = React.useState<{
+        key: number;
+        events: AllDayEventRange[];
         timedCount: number;
         /** Events are sorted by date; the first nearCount fall within ALL_DAY_CHOICE_WINDOW_MS. */
         nearCount: number;
-        showAll: boolean;
-    } | null>(null);
+    }[]>([]);
+    const allDayChoiceKeyRef = React.useRef(0);
+    // Events waiting in the queue, so an identical event from a concurrent import is not asked twice.
+    const queuedAllDayRef = React.useRef<ImportedBusyEvent[]>([]);
     // Mirrors universityBusyEvents synchronously so an import can tell how many events
     // were actually new before React applies the state update.
     const busyEventsRef = React.useRef<ImportedBusyEvent[]>([]);
 
     const visibleBusyEvents = React.useMemo(() => {
+        const today = jstDateStr();
         return universityBusyEvents.flatMap((ev) => {
             if (!ev.allDay) return [ev];
-            // Expand to local midnight-to-midnight blocks so every covered day is marked in full.
-            return allDayEventDateRange(ev.start, ev.end).map((dateStr) => {
-                const start = new Date(`${dateStr}T00:00:00`);
-                const end = new Date(start);
-                end.setDate(end.getDate() + 1);
-                return { ...ev, start: start.toISOString(), end: end.toISOString() };
-            });
+            const from = ev.start > today ? ev.start : today;
+            const to = new Date(`${from}T00:00:00`);
+            to.setDate(to.getDate() + ALL_DAY_MAX_DISPLAY_DAYS);
+            const clipped = clipAllDayEvent(ev, from, format(to, "yyyy-MM-dd"));
+            // Local midnight-to-midnight blocks so every covered day is marked in full.
+            return clipped ? expandAllDayToBlocks(clipped).map((block) => ({ ...ev, ...block })) : [];
         });
     }, [universityBusyEvents]);
 
@@ -346,13 +315,15 @@ export function EventForm() {
 
             // Past days cannot be candidates, so only ask about all-day events still ahead
             // that are not reflected yet.
-            const today = JST_DATE_FORMAT.format(new Date());
+            const today = jstDateStr();
             const allDayEvents = newEvents
                 .filter(ev => ev.allDay)
-                .map(normalizeAllDayEvent)
-                .filter((ev): ev is ImportedBusyEvent => ev !== null && ev.end > today)
+                .map(ev => normalizeAllDayEvent(ev.start, ev.end, ev.summary))
+                .filter((ev): ev is AllDayEventRange => ev !== null && ev.end > today)
+                .map(ev => ({ ...ev, allDay: true }))
                 .filter((ev, i, arr) => arr.findIndex(other => isSameBusyEvent(other, ev)) === i)
                 .filter(ev => !busyEventsRef.current.some(p => isSameBusyEvent(p, ev)))
+                .filter(ev => !queuedAllDayRef.current.some(q => isSameBusyEvent(q, ev)))
                 .sort((a, b) => a.start.localeCompare(b.start));
 
             if (allDayEvents.length === 0) {
@@ -361,24 +332,21 @@ export function EventForm() {
             }
             // Feeds such as holiday calendars span years. List the window the Google import
             // also covers first, and leave the rest behind a button.
-            const horizon = JST_DATE_FORMAT.format(new Date(Date.now() + ALL_DAY_CHOICE_WINDOW_MS));
+            const horizon = jstDateStr(ALL_DAY_CHOICE_WINDOW_MS);
             const nearCount = allDayEvents.filter(ev => ev.start <= horizon).length;
-            setAllDayChoice({
-                events: allDayEvents,
-                selected: allDayEvents.map(() => false),
-                timedCount: timedAdded,
-                nearCount,
-                showAll: nearCount === 0,
-            });
+            const key = ++allDayChoiceKeyRef.current;
+            queuedAllDayRef.current = [...queuedAllDayRef.current, ...allDayEvents];
+            setAllDayChoices(prev => [...prev, { key, events: allDayEvents, timedCount: timedAdded, nearCount }]);
         },
         [mergeBusyEvents, showImportResult]
     );
 
-    const finishAllDayChoice = (apply: boolean) => {
+    const allDayChoice = allDayChoices[0];
+    const finishAllDayChoice = (chosen: AllDayEventRange[]) => {
         if (!allDayChoice) return;
-        const chosen = apply ? allDayChoice.events.filter((_, i) => allDayChoice.selected[i]) : [];
-        const allDayAdded = mergeBusyEvents(chosen);
-        setAllDayChoice(null);
+        const allDayAdded = mergeBusyEvents(chosen.map(ev => ({ ...ev, allDay: true })));
+        queuedAllDayRef.current = queuedAllDayRef.current.filter(q => !allDayChoice.events.includes(q));
+        setAllDayChoices(prev => prev.slice(1));
         showImportResult(allDayChoice.timedCount, allDayAdded);
     };
 
@@ -707,63 +675,15 @@ export function EventForm() {
                 </div>
             </div>
 
-            <Dialog open={allDayChoice !== null} onOpenChange={(open) => { if (!open) finishAllDayChoice(false); }}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>終日の予定を反映しますか</DialogTitle>
-                        <DialogDescription>
-                            チェックした予定は、その日を一日中「予定あり」として赤く表示します。祝日など、候補選びに関係ない予定はチェックしないでください。
-                        </DialogDescription>
-                    </DialogHeader>
-                    {allDayChoice && (
-                        <ul className="max-h-72 overflow-y-auto rounded-md border divide-y">
-                            {allDayChoice.events.slice(0, allDayChoice.showAll ? undefined : allDayChoice.nearCount).map((ev, i) => (
-                                <li key={`${ev.start}|${ev.end}|${ev.summary}`}>
-                                    <label className="flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-muted/50">
-                                        <input
-                                            type="checkbox"
-                                            className="h-4 w-4 shrink-0 accent-primary"
-                                            checked={allDayChoice.selected[i]}
-                                            onChange={(e) => {
-                                                const selected = [...allDayChoice.selected];
-                                                selected[i] = e.target.checked;
-                                                setAllDayChoice({ ...allDayChoice, selected });
-                                            }}
-                                        />
-                                        <span className="w-24 shrink-0 tabular-nums text-muted-foreground">{formatAllDayRange(ev)}</span>
-                                        <span className="min-w-0 break-words">{ev.summary}</span>
-                                    </label>
-                                </li>
-                            ))}
-                            {!allDayChoice.showAll && allDayChoice.nearCount < allDayChoice.events.length && (
-                                <li>
-                                    <button
-                                        type="button"
-                                        className="w-full px-3 py-2 text-sm text-primary hover:bg-muted/50"
-                                        onClick={() => setAllDayChoice({ ...allDayChoice, showAll: true })}
-                                    >
-                                        さらに先の予定も表示（{allDayChoice.events.length - allDayChoice.nearCount}件）
-                                    </button>
-                                </li>
-                            )}
-                        </ul>
-                    )}
-                    <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2">
-                        <Button type="button" variant="outline" onClick={() => finishAllDayChoice(false)}>
-                            終日の予定は反映しない
-                        </Button>
-                        <Button
-                            type="button"
-                            onClick={() => finishAllDayChoice(true)}
-                            disabled={!allDayChoice?.selected.some(Boolean)}
-                        >
-                            {allDayChoice?.selected.some(Boolean)
-                                ? `選んだ${allDayChoice.selected.filter(Boolean).length}件を反映`
-                                : "反映する予定を選んでください"}
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            {allDayChoice && (
+                <AllDayEventChoiceDialog
+                    key={allDayChoice.key}
+                    events={allDayChoice.events}
+                    nearCount={allDayChoice.nearCount}
+                    description="チェックした予定は、その日を一日中「予定あり」として赤く表示します。祝日など、候補選びに関係ない予定はチェックしないでください。"
+                    onDone={finishAllDayChoice}
+                />
+            )}
 
             {/* Input Modal */}
             <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
